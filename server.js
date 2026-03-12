@@ -159,7 +159,7 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
           await delay(2000, 4000);
 
           // Scroll like a human
@@ -205,7 +205,11 @@ app.get("/api/scan", async (req, res) => {
               if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid-in-text');
               if (/time left/i.test(fullText)) auctionSignals.push('time-left');
 
-              items.push({ title, priceText, link, auctionSignals });
+              // Grab thumbnail image URL for OCR verification
+              const imgEl = el.querySelector('img[src*="ebayimg"]');
+              const imgUrl = imgEl ? imgEl.src : '';
+
+              items.push({ title, priceText, link, auctionSignals, imgUrl });
             });
             return items;
           });
@@ -235,6 +239,7 @@ app.get("/api/scan", async (req, res) => {
               link: l.link.split("?")[0],
               isAuction,
               itemId,
+              imgUrl: l.imgUrl ? l.imgUrl.replace(/s-l\d+/, 's-l1600') : '',
             });
 
             send({ type: "found", count: allListings.length, latest: cardName, price });
@@ -261,66 +266,42 @@ app.get("/api/scan", async (req, res) => {
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
 
-    // ===== PHASE 2: VERIFY PSA GRADING =====
-    send({ type: "log", message: "Phase 2: Verifying PSA grading on listing pages..." });
+    // ===== PHASE 2: VERIFY PSA GRADING VIA IMAGE OCR =====
+    send({ type: "log", message: "Phase 2: Verifying PSA grading via image OCR (no page visits needed)..." });
 
     const verified = [];
-    const maxVerify = Math.min(allListings.length, 80);
 
-    for (let i = 0; i < maxVerify; i++) {
+    for (let i = 0; i < allListings.length; i++) {
       const listing = allListings[i];
-      send({ type: "log", message: `Verifying ${i + 1}/${maxVerify}: ${listing.cardName} ($${listing.price})...` });
+      if (!listing.imgUrl) {
+        send({ type: "log", message: `Skipping ${listing.cardName} - no image URL` });
+        continue;
+      }
+
+      send({ type: "log", message: `Verifying ${i + 1}/${allListings.length}: ${listing.cardName} ($${listing.price})...` });
 
       try {
-        await page.goto(listing.link, { waitUntil: "domcontentloaded", timeout: 20000 });
-        await delay(1500, 3500);
+        const { data: { text } } = await Tesseract.recognize(listing.imgUrl, 'eng', { logger: () => {} });
+        const hasPSA = /\bpsa\b/i.test(text);
+        const hasGemMT = /gem\s*m[ti]/i.test(text);
+        const hasCertNum = /\b\d{7,9}\b/.test(text);
+        const has10 = /\b10\b/.test(text);
+        const hasOtherGrader = /\b(gma|bgs|cgc|sgc|ace)\b/i.test(text);
 
-        // Always OCR the listing images - PSA and 10 MUST be visible in the picture to count
-        let ocrResult = false;
-        const imgUrls = await page.evaluate(() => {
-          const imgs = new Set();
-          const matches = document.body.innerHTML.match(/https:\/\/i\.ebayimg\.com\/images\/g\/[A-Za-z0-9~_-]+\/s-l\d+\.\w+/g) || [];
-          for (const url of matches) {
-            imgs.add(url.replace(/s-l\d+\.\w+/, 's-l1600.jpg'));
-          }
-          return [...imgs].slice(0, 5);
-        });
-
-        for (const imgUrl of imgUrls) {
-          try {
-            const { data: { text } } = await Tesseract.recognize(imgUrl, 'eng', { logger: () => {} });
-            const hasPSA = /\bpsa\b/i.test(text);
-            const hasGemMT = /gem\s*m[ti]/i.test(text);
-            const hasCertNum = /\b\d{7,9}\b/.test(text);
-            const has10 = /\b10\b/.test(text);
-            const hasOtherGrader = /\b(gma|bgs|cgc|sgc|ace)\b/i.test(text);
-
-            if (hasOtherGrader) continue;
-            if ((hasPSA && has10) || (hasGemMT && hasCertNum && has10)) {
-              ocrResult = true;
-              send({ type: "log", message: `  ✓ PSA 10 confirmed in image` });
-              break;
-            }
-          } catch (e) {}
-        }
-
-        const isPSA = ocrResult;
-
-        if (isPSA) {
+        if (!hasOtherGrader && ((hasPSA && has10) || (hasGemMT && hasCertNum && has10))) {
           listing.verified = true;
           verified.push(listing);
           send({ type: "verified", count: verified.length, card: listing.cardName });
+          send({ type: "log", message: `  ✓ PSA 10 confirmed in image` });
         } else {
-          send({ type: "log", message: `  Removed ${listing.cardName} ($${listing.price}) - no PSA slab confirmed in images` });
+          send({ type: "log", message: `  ✗ PSA 10 not confirmed in image (PSA:${hasPSA} 10:${has10} other:${hasOtherGrader})` });
         }
       } catch (err) {
-        send({ type: "error", message: `Verify error for ${listing.cardName}: ${err.message}` });
+        send({ type: "error", message: `OCR error for ${listing.cardName}: ${err.message}` });
       }
-
-      await delay(2500, 5500);
     }
 
-    send({ type: "log", message: `Phase 2 complete: ${verified.length} verified listings.` });
+    send({ type: "log", message: `Phase 2 complete: ${verified.length} verified out of ${allListings.length}.` });
 
     // ===== PHASE 3: PRICECHARTING LOOKUP =====
     send({ type: "log", message: "Phase 3: Looking up market prices on PriceCharting..." });
