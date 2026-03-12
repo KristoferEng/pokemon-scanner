@@ -1,7 +1,11 @@
 const express = require("express");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const path = require("path");
 const cheerio = require("cheerio");
 const Tesseract = require("tesseract.js");
+
+puppeteer.use(StealthPlugin());
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
@@ -13,14 +17,6 @@ app.use(express.json());
 function delay(min, max) {
   return new Promise((r) => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
 }
-
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-  "Cache-Control": "no-cache",
-};
 
 // All 102 base set cards
 const BASE_SET_CARDS = [
@@ -85,12 +81,6 @@ function identifyCard(title) {
   return null;
 }
 
-async function fetchPage(url) {
-  const resp = await fetch(url, { headers: HEADERS, redirect: "follow" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return await resp.text();
-}
-
 // SSE endpoint
 app.get("/api/scan", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -102,13 +92,33 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch(e) {}
   };
 
+  let browser;
   try {
+    send({ type: "log", message: "Launching stealth browser..." });
+
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--window-size=1920,1080",
+      ],
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+
     // ===== PHASE 1: COLLECT ALL LISTINGS =====
-    send({ type: "log", message: "Phase 1: Collecting all eBay listings (using fetch + cheerio)..." });
+    send({ type: "log", message: "Phase 1: Collecting eBay listings..." });
 
     const allListings = [];
     const seenIds = new Set();
     const MAX_FOUND = 1000;
+    const searchStartTime = Date.now();
+    const SEARCH_TIME_LIMIT = 3 * 60 * 1000;
 
     const searches = [
       { q: "psa 10 pokemon base set unlimited", pages: 8 },
@@ -122,58 +132,59 @@ app.get("/api/scan", async (req, res) => {
       if (hitCap) break;
       for (let pageNum = 1; pageNum <= search.pages; pageNum++) {
         if (hitCap) break;
+        if (Date.now() - searchStartTime >= SEARCH_TIME_LIMIT) {
+          send({ type: "log", message: `Time limit reached. Found ${allListings.length} listings.` });
+          hitCap = true;
+          break;
+        }
         const encoded = encodeURIComponent(search.q);
         const url = `https://www.ebay.com/sch/i.html?_nkw=${encoded}&_sacat=0&LH_TitleDesc=1&_ipg=240&_sop=15&_pgn=${pageNum}`;
 
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          const html = await fetchPage(url);
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+          await delay(3000, 6000);
+
+          // Scroll to trigger lazy loading
+          for (let i = 0; i < 5; i++) {
+            await page.evaluate(() => window.scrollBy(0, Math.random() * 600 + 400));
+            await delay(500, 1000);
+          }
+
+          // Get page HTML and parse with cheerio (more reliable than page.evaluate)
+          const html = await page.content();
           const $ = cheerio.load(html);
 
-          // Try multiple selectors for eBay listings
+          const pageTitle = $('title').text();
+          send({ type: "log", message: `  Page: "${pageTitle}" (${html.length} bytes)` });
+
+          // Check if we got blocked
+          if (pageTitle.includes('Pardon') || pageTitle.includes('Security')) {
+            send({ type: "log", message: `  Bot detection triggered. Waiting 30s...` });
+            await delay(30000, 40000);
+            continue;
+          }
+
           let listings = [];
 
-          // Modern eBay selectors
-          $('li.s-item, div.s-item, .srp-results .s-item').each((_, el) => {
+          // eBay uses .s-card.s-card--vertical for listings
+          $('.s-card.s-card--vertical').each((_, el) => {
             const $el = $(el);
-            const title = $el.find('.s-item__title').text().trim();
-            const priceText = $el.find('.s-item__price').text().trim();
-            const link = $el.find('a.s-item__link').attr('href') || '';
-            const imgEl = $el.find('img.s-item__image-img, img[src*="ebayimg"]');
-            const imgUrl = imgEl.attr('src') || imgEl.attr('data-src') || '';
-            const timeText = $el.find('.s-item__time-left, .s-item__time-end').text().trim();
+            const title = $el.find('.s-card__title').text().trim().replace(/Opens in a new window or tab$/i, '');
+            const priceText = $el.find('.s-card__price').text().trim();
+            const link = $el.find('a[href*="/itm/"]').attr('href') || '';
+            const imgUrl = $el.find('img[src*="ebayimg"]').attr('src') || $el.find('img').attr('src') || '';
             const fullText = $el.text().toLowerCase();
 
             if (!title || title === 'Shop on eBay' || !link.includes('/itm/')) return;
 
             const auctionSignals = [];
-            if (/\d+[dhms]\s*(left|\d)/i.test(timeText)) auctionSignals.push(timeText);
             if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid-in-text');
             if (/time left/i.test(fullText)) auctionSignals.push('time-left');
 
             listings.push({ title, priceText, link, auctionSignals, imgUrl });
           });
-
-          // Also try card-based selectors
-          if (listings.length === 0) {
-            $('.s-card, [data-viewport]').each((_, el) => {
-              const $el = $(el);
-              const titleEl = $el.find('[class*="title"] span, [class*="title"] a');
-              const title = titleEl.text().trim();
-              const priceText = $el.find('[class*="price"]').first().text().trim();
-              const link = $el.find('a[href*="/itm/"]').attr('href') || '';
-              const imgUrl = $el.find('img[src*="ebayimg"]').attr('src') || '';
-              const fullText = $el.text().toLowerCase();
-
-              if (!title || title === 'Shop on eBay' || !link.includes('/itm/')) return;
-
-              const auctionSignals = [];
-              if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid-in-text');
-
-              listings.push({ title, priceText, link, auctionSignals, imgUrl });
-            });
-          }
 
           send({ type: "log", message: `  Found ${listings.length} listings on this page` });
 
@@ -216,9 +227,9 @@ app.get("/api/scan", async (req, res) => {
           send({ type: "error", message: `Search error on "${search.q}" page ${pageNum}: ${err.message}` });
         }
 
-        await delay(2000, 5000);
+        await delay(4000, 8000);
       }
-      await delay(3000, 6000);
+      await delay(5000, 10000);
     }
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
@@ -275,11 +286,15 @@ app.get("/api/scan", async (req, res) => {
         const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
 
-        const html = await fetchPage(directUrl);
-        const $ = cheerio.load(html);
-        const priceText = $('#manual_only_price').text().trim();
-        const match = priceText.match(/\$([\d,]+\.?\d*)/);
-        const marketPrice = match ? parseFloat(match[1].replace(/,/g, '')) : null;
+        await page.goto(directUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await delay(1500, 3000);
+
+        const marketPrice = await page.evaluate(() => {
+          const el = document.getElementById('manual_only_price');
+          if (!el) return null;
+          const match = el.textContent.match(/\$([\d,]+\.?\d*)/);
+          return match ? parseFloat(match[1].replace(/,/g, '')) : null;
+        });
 
         send({ type: "log", message: `  ${cardName}: PSA 10 market price = ${marketPrice ? '$' + marketPrice : 'N/A'}` });
         priceCache[cardName] = { marketPrice, pricechartingUrl: directUrl };
@@ -288,7 +303,7 @@ app.get("/api/scan", async (req, res) => {
         priceCache[cardName] = { marketPrice: null, pricechartingUrl: null };
       }
 
-      await delay(1000, 2000);
+      await delay(2000, 4000);
     }
 
     // ===== BUILD RESULTS =====
@@ -339,6 +354,7 @@ app.get("/api/scan", async (req, res) => {
     send({ type: "error", message: e.message });
     send({ type: "done" });
   } finally {
+    if (browser) await browser.close();
     res.end();
   }
 });
