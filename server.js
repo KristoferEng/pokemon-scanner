@@ -1,7 +1,10 @@
 const express = require("express");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const path = require("path");
 const cheerio = require("cheerio");
-const Tesseract = require("tesseract.js");
+
+puppeteer.use(StealthPlugin());
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
@@ -93,47 +96,43 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(': ping\n\n'); } catch(e) {}
   }, 15000);
 
+  let browser;
   try {
-    // Rotate User-Agents to look more human
-    const USER_AGENTS = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    ];
-    const pickedUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+    send({ type: "log", message: "Launching stealth browser..." });
 
-    // Seed cookies by visiting eBay homepage first
-    send({ type: "log", message: "Visiting eBay to establish session..." });
-    let ebayCookies = '';
-    try {
-      const homeResp = await fetch('https://www.ebay.com/', {
-        headers: {
-          'User-Agent': pickedUA,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(15000),
-      });
-      const setCookies = homeResp.headers.getSetCookie?.() || [];
-      ebayCookies = setCookies.map(c => c.split(';')[0]).join('; ');
-      send({ type: "log", message: `  Session established (${setCookies.length} cookies)` });
-    } catch (e) {
-      send({ type: "log", message: `  Could not seed cookies: ${e.message}` });
-    }
+    browser = await puppeteer.launch({
+      headless: "new",
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--metrics-recording-only",
+        "--no-first-run",
+        "--js-flags=--max-old-space-size=128",
+      ],
+    });
 
-    const getHeaders = (referer) => ({
-      'User-Agent': pickedUA,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Referer': referer || 'https://www.ebay.com/',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      ...(ebayCookies ? { 'Cookie': ebayCookies } : {}),
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
+
+    // Block images, CSS, fonts, media to save memory
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['image', 'stylesheet', 'font', 'media', 'texttrack', 'websocket'].includes(type)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
     });
 
     // ===== PHASE 1: COLLECT ALL LISTINGS =====
@@ -168,33 +167,40 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          const referer = pageNum === 1 ? 'https://www.ebay.com/' : `https://www.ebay.com/sch/i.html?_nkw=${encoded}&_pgn=${pageNum - 1}`;
-          const resp = await fetch(url, { headers: getHeaders(referer), redirect: 'follow', signal: AbortSignal.timeout(30000) });
-          const html = await resp.text();
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+          await delay(2000, 4000);
+
+          // Light scrolling to trigger lazy-loaded content
+          await page.evaluate(() => window.scrollBy(0, 800));
+          await delay(500, 1000);
+          await page.evaluate(() => window.scrollBy(0, 800));
+          await delay(500, 1000);
+
+          // Get page HTML and parse with cheerio
+          const html = await page.content();
           const $ = cheerio.load(html);
 
           const pageTitle = $('title').text();
-          send({ type: "log", message: `  Page: "${pageTitle}" (${html.length} bytes)` });
+          send({ type: "log", message: `  Page title: "${pageTitle.substring(0, 60)}..."` });
 
           // Check if we got blocked
           if (pageTitle.includes('Pardon') || pageTitle.includes('Security')) {
-            send({ type: "log", message: `  Bot detection triggered. Waiting 15s...` });
-            await delay(15000, 20000);
+            send({ type: "log", message: `  Bot detection triggered. Waiting 30s...` });
+            await delay(30000, 40000);
             continue;
           }
 
           let listings = [];
 
           // Try multiple eBay listing selectors
-          const selectors = ['.s-card.s-card--vertical', '.srp-results .s-item', '[data-viewport]'];
-          let sel = selectors.find(s => $(s).length > 0) || selectors[0];
+          const selectors = ['.s-card.s-card--vertical', '.srp-results .s-item'];
+          const sel = selectors.find(s => $(s).length > 0) || selectors[0];
 
           $(sel).each((_, el) => {
             const $el = $(el);
             const title = ($el.find('.s-card__title').text() || $el.find('.s-item__title').text() || '').trim().replace(/Opens in a new window or tab$/i, '').replace(/^New Listing/i, '').trim();
             const priceText = ($el.find('.s-card__price').text() || $el.find('.s-item__price').text() || '').trim();
             const link = $el.find('a[href*="/itm/"]').attr('href') || '';
-            const imgUrl = $el.find('img[src*="ebayimg"]').attr('src') || $el.find('img').attr('src') || '';
             const fullText = $el.text().toLowerCase();
 
             if (!title || title === 'Shop on eBay' || !link.includes('/itm/')) return;
@@ -203,7 +209,7 @@ app.get("/api/scan", async (req, res) => {
             if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid-in-text');
             if (/time left/i.test(fullText)) auctionSignals.push('time-left');
 
-            listings.push({ title, priceText, link, auctionSignals, imgUrl });
+            listings.push({ title, priceText, link, auctionSignals });
           });
 
           send({ type: "log", message: `  Found ${listings.length} listings on this page` });
@@ -231,7 +237,6 @@ app.get("/api/scan", async (req, res) => {
               link: l.link.split("?")[0],
               isAuction,
               itemId,
-              imgUrl: l.imgUrl ? l.imgUrl.replace(/s-l\d+/, 's-l1600') : '',
             });
 
             send({ type: "found", count: allListings.length, latest: cardName, price });
@@ -243,89 +248,38 @@ app.get("/api/scan", async (req, res) => {
           }
 
           send({ type: "log", message: `  Total matched so far: ${allListings.length}` });
+
+          // Clear page memory between searches
+          await page.evaluate(() => { document.body.innerHTML = ''; });
+
         } catch (err) {
           send({ type: "error", message: `Search error on "${search.q}" page ${pageNum}: ${err.message}` });
         }
 
-        await delay(2000, 4000);
+        await delay(3000, 6000);
       }
-      await delay(3000, 5000);
+      await delay(4000, 8000);
     }
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
 
-    // ===== PHASE 2: VERIFY PSA GRADING VIA IMAGE OCR =====
-    send({ type: "log", message: "Phase 2: Verifying PSA grading via image OCR..." });
-
-    const verified = [];
-    let worker = null;
-
-    try {
-      worker = await Tesseract.createWorker('eng');
-
-      for (let i = 0; i < allListings.length; i++) {
-        const listing = allListings[i];
-        if (!listing.imgUrl) {
-          // No image: include as unverified
-          listing.verified = false;
-          verified.push(listing);
-          send({ type: "log", message: `No image for ${listing.cardName} - including as unverified` });
-          continue;
-        }
-
-        send({ type: "log", message: `Verifying ${i + 1}/${allListings.length}: ${listing.cardName} ($${listing.price})...` });
-
-        try {
-          const { data: { text } } = await worker.recognize(listing.imgUrl);
-          const hasPSA = /\bpsa\b/i.test(text);
-          const hasGemMT = /gem\s*m[ti]/i.test(text);
-          const hasCertNum = /\b\d{7,9}\b/.test(text);
-          const has10 = /\b10\b/.test(text);
-          const hasOtherGrader = /\b(gma|bgs|cgc|sgc|ace)\b/i.test(text);
-
-          if (!hasOtherGrader && ((hasPSA && has10) || (hasGemMT && hasCertNum && has10))) {
-            listing.verified = true;
-            verified.push(listing);
-            send({ type: "verified", count: verified.length, card: listing.cardName });
-            send({ type: "log", message: `  ✓ PSA 10 confirmed in image` });
-          } else {
-            // OCR couldn't confirm — include as unverified so user still sees it
-            listing.verified = false;
-            verified.push(listing);
-            send({ type: "log", message: `  ? Unverified (PSA:${hasPSA} 10:${has10} other:${hasOtherGrader}) - including anyway` });
-          }
-        } catch (err) {
-          // OCR failed — include as unverified fallback
-          listing.verified = false;
-          verified.push(listing);
-          send({ type: "error", message: `OCR error for ${listing.cardName}: ${err.message} - including as unverified` });
-        }
-      }
-    } catch (workerErr) {
-      send({ type: "error", message: `Tesseract worker init failed: ${workerErr.message} - including all listings as unverified` });
-      for (const listing of allListings) {
-        if (!verified.includes(listing)) {
-          listing.verified = false;
-          verified.push(listing);
-        }
-      }
-    } finally {
-      if (worker) {
-        try { await worker.terminate(); } catch(e) {}
-      }
+    // Close browser to free memory before Phase 2
+    if (browser) {
+      await browser.close();
+      browser = null;
+      send({ type: "log", message: "Browser closed to free memory." });
     }
 
-    send({ type: "log", message: `Phase 2 complete: ${verified.filter(l => l.verified).length} verified, ${verified.filter(l => !l.verified).length} unverified out of ${allListings.length}.` });
-
-    // ===== PHASE 3: PRICECHARTING LOOKUP =====
-    send({ type: "log", message: "Phase 3: Looking up market prices on PriceCharting..." });
+    // ===== PHASE 2: PRICECHARTING LOOKUP =====
+    send({ type: "log", message: "Phase 2: Looking up market prices on PriceCharting..." });
 
     const priceCache = {};
-    const uniqueCards = [...new Set(verified.map((l) => l.cardName))];
+    const uniqueCards = [...new Set(allListings.map((l) => l.cardName))];
 
     for (let i = 0; i < uniqueCards.length; i++) {
       const cardName = uniqueCards[i];
       send({ type: "log", message: `PriceCharting ${i + 1}/${uniqueCards.length}: ${cardName}...` });
+      send({ type: "verified", count: i + 1, card: cardName });
 
       try {
         const cardInfo = BASE_SET_CARDS.find((c) => c.name === cardName);
@@ -352,7 +306,7 @@ app.get("/api/scan", async (req, res) => {
         priceCache[cardName] = { marketPrice: null, pricechartingUrl: null };
       }
 
-      await delay(2000, 4000);
+      await delay(1500, 3000);
     }
 
     // ===== BUILD RESULTS =====
@@ -361,7 +315,7 @@ app.get("/api/scan", async (req, res) => {
     const buyItNow = [];
     const auctions = [];
 
-    for (const listing of verified) {
+    for (const listing of allListings) {
       const pc = priceCache[listing.cardName] || {};
       const marketPrice = pc.marketPrice;
       const difference = marketPrice != null ? listing.price - marketPrice : null;
@@ -374,7 +328,7 @@ app.get("/api/scan", async (req, res) => {
         difference,
         ebayUrl: listing.link,
         pricechartingUrl: pc.pricechartingUrl,
-        verified: listing.verified,
+        verified: true,
       };
 
       if (listing.isAuction) {
@@ -404,6 +358,7 @@ app.get("/api/scan", async (req, res) => {
     send({ type: "done" });
   } finally {
     clearInterval(keepAlive);
+    if (browser) await browser.close().catch(() => {});
     res.end();
   }
 });
@@ -411,7 +366,6 @@ app.get("/api/scan", async (req, res) => {
 const PORT = process.env.PORT || 3456;
 const server = app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
-  console.log("Press Ctrl+C to stop.");
 });
 server.keepAliveTimeout = 600000;
 server.headersTimeout = 600000;

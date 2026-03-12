@@ -56,8 +56,8 @@
 
     <div class="stats" id="stats" style="display:none;">
       <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
-      <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Verified</div></div>
-      <div class="stat"><div class="stat-value" id="phase">1/3</div><div class="stat-label">Phase</div></div>
+      <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Priced</div></div>
+      <div class="stat"><div class="stat-value" id="phase">1/2</div><div class="stat-label">Phase</div></div>
     </div>
 
     <div id="logContainer"></div>
@@ -111,7 +111,7 @@
       document.querySelector('#auctionTable tbody').innerHTML = '';
       document.getElementById('foundCount').textContent = '0';
       document.getElementById('verifiedCount').textContent = '0';
-      document.getElementById('phase').textContent = '1/3';
+      document.getElementById('phase').textContent = '1/2';
 
       addLog('Starting scan...', 'info');
 
@@ -122,8 +122,7 @@
 
         if (data.type === 'log') {
           // Detect phase
-          if (data.message.includes('Phase 2')) document.getElementById('phase').textContent = '2/3';
-          else if (data.message.includes('Phase 3')) document.getElementById('phase').textContent = '3/3';
+          if (data.message.includes('Phase 2')) document.getElementById('phase').textContent = '2/2';
           addLog(data.message, 'info');
         }
         else if (data.type === 'found') {
