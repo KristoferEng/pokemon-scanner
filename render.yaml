@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: pokemon-scanner
+    runtime: docker
+    repo: https://github.com/KristoferEng/pokemon-scanner
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 3456
