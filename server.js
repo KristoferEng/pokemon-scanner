@@ -92,6 +92,11 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch(e) {}
   };
 
+  // SSE keep-alive ping every 15 seconds
+  const keepAlive = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch(e) {}
+  }, 15000);
+
   let browser;
   try {
     send({ type: "log", message: "Launching stealth browser..." });
@@ -103,6 +108,7 @@ app.get("/api/scan", async (req, res) => {
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--single-process",
         "--window-size=1920,1080",
       ],
     });
@@ -234,42 +240,75 @@ app.get("/api/scan", async (req, res) => {
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
 
+    // Close browser before Phase 2 to free memory (Puppeteer + Tesseract together cause OOM)
+    if (browser) {
+      await browser.close();
+      browser = null;
+      send({ type: "log", message: "Browser closed to free memory for OCR." });
+    }
+
     // ===== PHASE 2: VERIFY PSA GRADING VIA IMAGE OCR =====
     send({ type: "log", message: "Phase 2: Verifying PSA grading via image OCR..." });
 
     const verified = [];
+    let worker = null;
 
-    for (let i = 0; i < allListings.length; i++) {
-      const listing = allListings[i];
-      if (!listing.imgUrl) {
-        send({ type: "log", message: `Skipping ${listing.cardName} - no image URL` });
-        continue;
-      }
+    try {
+      worker = await Tesseract.createWorker('eng');
 
-      send({ type: "log", message: `Verifying ${i + 1}/${allListings.length}: ${listing.cardName} ($${listing.price})...` });
-
-      try {
-        const { data: { text } } = await Tesseract.recognize(listing.imgUrl, 'eng', { logger: () => {} });
-        const hasPSA = /\bpsa\b/i.test(text);
-        const hasGemMT = /gem\s*m[ti]/i.test(text);
-        const hasCertNum = /\b\d{7,9}\b/.test(text);
-        const has10 = /\b10\b/.test(text);
-        const hasOtherGrader = /\b(gma|bgs|cgc|sgc|ace)\b/i.test(text);
-
-        if (!hasOtherGrader && ((hasPSA && has10) || (hasGemMT && hasCertNum && has10))) {
-          listing.verified = true;
+      for (let i = 0; i < allListings.length; i++) {
+        const listing = allListings[i];
+        if (!listing.imgUrl) {
+          // No image: include as unverified
+          listing.verified = false;
           verified.push(listing);
-          send({ type: "verified", count: verified.length, card: listing.cardName });
-          send({ type: "log", message: `  ✓ PSA 10 confirmed in image` });
-        } else {
-          send({ type: "log", message: `  ✗ Not confirmed (PSA:${hasPSA} 10:${has10} other:${hasOtherGrader})` });
+          send({ type: "log", message: `No image for ${listing.cardName} - including as unverified` });
+          continue;
         }
-      } catch (err) {
-        send({ type: "error", message: `OCR error for ${listing.cardName}: ${err.message}` });
+
+        send({ type: "log", message: `Verifying ${i + 1}/${allListings.length}: ${listing.cardName} ($${listing.price})...` });
+
+        try {
+          const { data: { text } } = await worker.recognize(listing.imgUrl);
+          const hasPSA = /\bpsa\b/i.test(text);
+          const hasGemMT = /gem\s*m[ti]/i.test(text);
+          const hasCertNum = /\b\d{7,9}\b/.test(text);
+          const has10 = /\b10\b/.test(text);
+          const hasOtherGrader = /\b(gma|bgs|cgc|sgc|ace)\b/i.test(text);
+
+          if (!hasOtherGrader && ((hasPSA && has10) || (hasGemMT && hasCertNum && has10))) {
+            listing.verified = true;
+            verified.push(listing);
+            send({ type: "verified", count: verified.length, card: listing.cardName });
+            send({ type: "log", message: `  ✓ PSA 10 confirmed in image` });
+          } else {
+            // OCR couldn't confirm — include as unverified so user still sees it
+            listing.verified = false;
+            verified.push(listing);
+            send({ type: "log", message: `  ? Unverified (PSA:${hasPSA} 10:${has10} other:${hasOtherGrader}) - including anyway` });
+          }
+        } catch (err) {
+          // OCR failed — include as unverified fallback
+          listing.verified = false;
+          verified.push(listing);
+          send({ type: "error", message: `OCR error for ${listing.cardName}: ${err.message} - including as unverified` });
+        }
+      }
+    } catch (workerErr) {
+      send({ type: "error", message: `Tesseract worker init failed: ${workerErr.message} - including all listings as unverified` });
+      for (const listing of allListings) {
+        if (!verified.includes(listing)) {
+          listing.verified = false;
+          verified.push(listing);
+        }
+      }
+    } finally {
+      if (worker) {
+        try { await worker.terminate(); } catch(e) {}
       }
     }
 
-    send({ type: "log", message: `Phase 2 complete: ${verified.length} verified out of ${allListings.length}.` });
+    send({ type: "log", message: `Phase 2 complete: ${verified.filter(l => l.verified).length} verified, ${verified.filter(l => !l.verified).length} unverified out of ${allListings.length}.` });
 
     // ===== PHASE 3: PRICECHARTING LOOKUP =====
     send({ type: "log", message: "Phase 3: Looking up market prices on PriceCharting..." });
@@ -286,15 +325,18 @@ app.get("/api/scan", async (req, res) => {
         const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
 
-        await page.goto(directUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await delay(1500, 3000);
-
-        const marketPrice = await page.evaluate(() => {
-          const el = document.getElementById('manual_only_price');
-          if (!el) return null;
-          const match = el.textContent.match(/\$([\d,]+\.?\d*)/);
-          return match ? parseFloat(match[1].replace(/,/g, '')) : null;
+        const pcResp = await fetch(directUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
+        const pcHtml = await pcResp.text();
+        const $pc = cheerio.load(pcHtml);
+
+        let marketPrice = null;
+        const priceEl = $pc('#manual_only_price');
+        if (priceEl.length) {
+          const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+          if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
+        }
 
         send({ type: "log", message: `  ${cardName}: PSA 10 market price = ${marketPrice ? '$' + marketPrice : 'N/A'}` });
         priceCache[cardName] = { marketPrice, pricechartingUrl: directUrl };
@@ -354,7 +396,8 @@ app.get("/api/scan", async (req, res) => {
     send({ type: "error", message: e.message });
     send({ type: "done" });
   } finally {
-    if (browser) await browser.close();
+    clearInterval(keepAlive);
+    if (browser) await browser.close().catch(() => {});
     res.end();
   }
 });
