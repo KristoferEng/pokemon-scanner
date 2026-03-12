@@ -1,11 +1,7 @@
 const express = require("express");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const path = require("path");
 const cheerio = require("cheerio");
 const Tesseract = require("tesseract.js");
-
-puppeteer.use(StealthPlugin());
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
@@ -97,25 +93,48 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(': ping\n\n'); } catch(e) {}
   }, 15000);
 
-  let browser;
   try {
-    send({ type: "log", message: "Launching stealth browser..." });
+    // Rotate User-Agents to look more human
+    const USER_AGENTS = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    ];
+    const pickedUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
-    browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        "--no-sandbox", "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--window-size=1920,1080",
-      ],
+    // Seed cookies by visiting eBay homepage first
+    send({ type: "log", message: "Visiting eBay to establish session..." });
+    let ebayCookies = '';
+    try {
+      const homeResp = await fetch('https://www.ebay.com/', {
+        headers: {
+          'User-Agent': pickedUA,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+      });
+      const setCookies = homeResp.headers.getSetCookie?.() || [];
+      ebayCookies = setCookies.map(c => c.split(';')[0]).join('; ');
+      send({ type: "log", message: `  Session established (${setCookies.length} cookies)` });
+    } catch (e) {
+      send({ type: "log", message: `  Could not seed cookies: ${e.message}` });
+    }
+
+    const getHeaders = (referer) => ({
+      'User-Agent': pickedUA,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Referer': referer || 'https://www.ebay.com/',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      ...(ebayCookies ? { 'Cookie': ebayCookies } : {}),
     });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
 
     // ===== PHASE 1: COLLECT ALL LISTINGS =====
     send({ type: "log", message: "Phase 1: Collecting eBay listings..." });
@@ -124,7 +143,7 @@ app.get("/api/scan", async (req, res) => {
     const seenIds = new Set();
     const MAX_FOUND = 1000;
     const searchStartTime = Date.now();
-    const SEARCH_TIME_LIMIT = 3 * 60 * 1000;
+    const SEARCH_TIME_LIMIT = 4 * 60 * 1000;
 
     const searches = [
       { q: "psa 10 pokemon base set unlimited", pages: 8 },
@@ -149,17 +168,9 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-          await delay(3000, 6000);
-
-          // Scroll to trigger lazy loading
-          for (let i = 0; i < 5; i++) {
-            await page.evaluate(() => window.scrollBy(0, Math.random() * 600 + 400));
-            await delay(500, 1000);
-          }
-
-          // Get page HTML and parse with cheerio (more reliable than page.evaluate)
-          const html = await page.content();
+          const referer = pageNum === 1 ? 'https://www.ebay.com/' : `https://www.ebay.com/sch/i.html?_nkw=${encoded}&_pgn=${pageNum - 1}`;
+          const resp = await fetch(url, { headers: getHeaders(referer), redirect: 'follow', signal: AbortSignal.timeout(30000) });
+          const html = await resp.text();
           const $ = cheerio.load(html);
 
           const pageTitle = $('title').text();
@@ -167,18 +178,21 @@ app.get("/api/scan", async (req, res) => {
 
           // Check if we got blocked
           if (pageTitle.includes('Pardon') || pageTitle.includes('Security')) {
-            send({ type: "log", message: `  Bot detection triggered. Waiting 30s...` });
-            await delay(30000, 40000);
+            send({ type: "log", message: `  Bot detection triggered. Waiting 15s...` });
+            await delay(15000, 20000);
             continue;
           }
 
           let listings = [];
 
-          // eBay uses .s-card.s-card--vertical for listings
-          $('.s-card.s-card--vertical').each((_, el) => {
+          // Try multiple eBay listing selectors
+          const selectors = ['.s-card.s-card--vertical', '.srp-results .s-item', '[data-viewport]'];
+          let sel = selectors.find(s => $(s).length > 0) || selectors[0];
+
+          $(sel).each((_, el) => {
             const $el = $(el);
-            const title = $el.find('.s-card__title').text().trim().replace(/Opens in a new window or tab$/i, '');
-            const priceText = $el.find('.s-card__price').text().trim();
+            const title = ($el.find('.s-card__title').text() || $el.find('.s-item__title').text() || '').trim().replace(/Opens in a new window or tab$/i, '').replace(/^New Listing/i, '').trim();
+            const priceText = ($el.find('.s-card__price').text() || $el.find('.s-item__price').text() || '').trim();
             const link = $el.find('a[href*="/itm/"]').attr('href') || '';
             const imgUrl = $el.find('img[src*="ebayimg"]').attr('src') || $el.find('img').attr('src') || '';
             const fullText = $el.text().toLowerCase();
@@ -233,19 +247,12 @@ app.get("/api/scan", async (req, res) => {
           send({ type: "error", message: `Search error on "${search.q}" page ${pageNum}: ${err.message}` });
         }
 
-        await delay(4000, 8000);
+        await delay(2000, 4000);
       }
-      await delay(5000, 10000);
+      await delay(3000, 5000);
     }
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
-
-    // Close browser before Phase 2 to free memory (Puppeteer + Tesseract together cause OOM)
-    if (browser) {
-      await browser.close();
-      browser = null;
-      send({ type: "log", message: "Browser closed to free memory for OCR." });
-    }
 
     // ===== PHASE 2: VERIFY PSA GRADING VIA IMAGE OCR =====
     send({ type: "log", message: "Phase 2: Verifying PSA grading via image OCR..." });
@@ -397,7 +404,6 @@ app.get("/api/scan", async (req, res) => {
     send({ type: "done" });
   } finally {
     clearInterval(keepAlive);
-    if (browser) await browser.close().catch(() => {});
     res.end();
   }
 });
