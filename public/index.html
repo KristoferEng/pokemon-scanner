@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PSA 10 Base Set Pokemon Scanner</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .container { max-width: 1300px; margin: 0 auto; padding: 20px; }
+    h1 { text-align: center; font-size: 2rem; margin: 20px 0 8px; background: linear-gradient(135deg, #fbbf24, #f59e0b); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { text-align: center; color: #94a3b8; margin-bottom: 20px; }
+    #goBtn { display: block; margin: 0 auto 20px; padding: 16px 60px; font-size: 1.3rem; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 4px 20px rgba(245,158,11,0.3); }
+    #goBtn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(245,158,11,0.5); }
+    #goBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* Stats bar */
+    .stats { display: flex; gap: 20px; justify-content: center; margin-bottom: 15px; }
+    .stat { background: #1e293b; border-radius: 10px; padding: 12px 24px; text-align: center; min-width: 140px; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; color: #fbbf24; }
+    .stat-label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+    /* Activity log */
+    #logContainer { display: none; background: #0b1120; border: 1px solid #1e293b; border-radius: 10px; padding: 12px; margin-bottom: 20px; max-height: 200px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem; line-height: 1.5; }
+    .log-entry { padding: 2px 0; }
+    .log-entry.error { color: #f87171; }
+    .log-entry.info { color: #60a5fa; }
+    .log-entry.success { color: #34d399; }
+    .log-time { color: #475569; margin-right: 8px; }
+
+    /* Tables */
+    h2 { color: #fbbf24; margin: 25px 0 12px; font-size: 1.3rem; border-bottom: 2px solid #1e293b; padding-bottom: 8px; }
+    .results { display: none; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
+    th { background: #1e293b; padding: 10px 8px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; position: sticky; top: 0; z-index: 1; }
+    td { padding: 8px; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }
+    tr:hover td { background: #1e293b; }
+    .price { font-weight: 600; color: #34d399; }
+    .negative { color: #34d399; font-weight: 600; }
+    .positive { color: #f87171; font-weight: 600; }
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; }
+    .badge-verified { background: #065f46; color: #34d399; }
+    .badge-unverified { background: #7c2d12; color: #fb923c; }
+    .empty { text-align: center; color: #64748b; padding: 30px; }
+    .count-badge { background: #1e293b; color: #fbbf24; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>PSA 10 Base Set Pokemon Scanner</h1>
+    <p class="subtitle">Scans eBay for PSA 10 Base Set Unlimited Pokemon cards &amp; compares to PriceCharting market prices (stops at 1000)</p>
+
+    <button id="goBtn" onclick="startScan()">Go</button>
+
+    <div class="stats" id="stats" style="display:none;">
+      <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
+      <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Verified</div></div>
+      <div class="stat"><div class="stat-value" id="phase">1/3</div><div class="stat-label">Phase</div></div>
+    </div>
+
+    <div id="logContainer"></div>
+
+    <div class="results" id="results">
+      <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
+      <table id="binTable">
+        <thead>
+          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>eBay</th><th>PriceCharting</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
+      <table id="auctionTable">
+        <thead>
+          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>eBay</th><th>PriceCharting</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let foundCount = 0;
+    let verifiedCount = 0;
+
+    function getTime() {
+      return new Date().toLocaleTimeString('en-US', { hour12: false });
+    }
+
+    function addLog(msg, type = 'info') {
+      const container = document.getElementById('logContainer');
+      container.style.display = 'block';
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.innerHTML = `<span class="log-time">[${getTime()}]</span>${msg}`;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function startScan() {
+      const btn = document.getElementById('goBtn');
+      btn.disabled = true;
+      foundCount = 0;
+      verifiedCount = 0;
+
+      document.getElementById('stats').style.display = 'flex';
+      document.getElementById('results').style.display = 'none';
+      document.getElementById('logContainer').innerHTML = '';
+      document.querySelector('#binTable tbody').innerHTML = '';
+      document.querySelector('#auctionTable tbody').innerHTML = '';
+      document.getElementById('foundCount').textContent = '0';
+      document.getElementById('verifiedCount').textContent = '0';
+      document.getElementById('phase').textContent = '1/3';
+
+      addLog('Starting scan...', 'info');
+
+      const es = new EventSource('/api/scan');
+
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+
+        if (data.type === 'log') {
+          // Detect phase
+          if (data.message.includes('Phase 2')) document.getElementById('phase').textContent = '2/3';
+          else if (data.message.includes('Phase 3')) document.getElementById('phase').textContent = '3/3';
+          addLog(data.message, 'info');
+        }
+        else if (data.type === 'found') {
+          foundCount = data.count;
+          document.getElementById('foundCount').textContent = foundCount;
+          addLog(`Found: ${data.latest} ($${data.price.toFixed(2)}) - Total: ${data.count}`, 'success');
+        }
+        else if (data.type === 'verified') {
+          verifiedCount = data.count;
+          document.getElementById('verifiedCount').textContent = verifiedCount;
+        }
+        else if (data.type === 'error') {
+          addLog(`ERROR: ${data.message}`, 'error');
+        }
+        else if (data.type === 'result') {
+          document.getElementById('results').style.display = 'block';
+          document.getElementById('binCount').textContent = data.buyItNow.length;
+          document.getElementById('auctionCount').textContent = data.auctions.length;
+          renderTable('#binTable tbody', data.buyItNow);
+          renderTable('#auctionTable tbody', data.auctions);
+        }
+        else if (data.type === 'done') {
+          addLog('Scan complete!', 'success');
+          btn.disabled = false;
+          es.close();
+        }
+      };
+
+      es.onerror = () => {
+        addLog('Connection lost to server.', 'error');
+        btn.disabled = false;
+        es.close();
+      };
+    }
+
+    function renderTable(selector, items) {
+      const tbody = document.querySelector(selector);
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No items found</td></tr>';
+        return;
+      }
+      let html = '';
+      for (const item of items) {
+        const diffClass = item.difference != null ? (item.difference < 0 ? 'negative' : 'positive') : '';
+        const diffText = item.difference != null
+          ? (item.difference < 0 ? '-$' + Math.abs(item.difference).toFixed(2) : '+$' + item.difference.toFixed(2))
+          : 'N/A';
+        const mp = item.marketPrice != null ? '$' + item.marketPrice.toFixed(2) : 'N/A';
+        const badge = item.verified !== false
+          ? '<span class="badge badge-verified">Verified</span>'
+          : '<span class="badge badge-unverified">Unverified</span>';
+        const pcLink = item.pricechartingUrl
+          ? `<a href="${item.pricechartingUrl}" target="_blank">View</a>`
+          : 'N/A';
+        html += `<tr>
+          <td>${item.name}${badge}</td>
+          <td class="price">$${item.price.toFixed(2)}</td>
+          <td>${mp}</td>
+          <td class="${diffClass}">${diffText}</td>
+          <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
+          <td>${pcLink}</td>
+        </tr>`;
+      }
+      tbody.innerHTML = html;
+    }
+  </script>
+</body>
+</html>
