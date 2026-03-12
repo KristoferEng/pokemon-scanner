@@ -107,16 +107,13 @@ app.get("/api/scan", async (req, res) => {
         "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
         "--disable-extensions",
         "--disable-background-networking",
         "--disable-default-apps",
         "--disable-sync",
         "--disable-translate",
-        "--metrics-recording-only",
         "--no-first-run",
-        "--js-flags=--max-old-space-size=128",
+        "--js-flags=--max-old-space-size=192",
       ],
     });
 
@@ -167,7 +164,7 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+          await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
           await delay(2000, 4000);
 
           // Light scrolling to trigger lazy-loaded content
