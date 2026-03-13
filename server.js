@@ -77,16 +77,61 @@ function identifyCard(title) {
 }
 
 const EBAY_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
+  'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
 };
 
+// Manage cookies across requests to maintain eBay session
+let ebayCookies = '';
+
+async function initEbaySession() {
+  try {
+    const resp = await fetch('https://www.ebay.com', {
+      headers: EBAY_HEADERS,
+      redirect: 'follow',
+    });
+    const setCookies = resp.headers.getSetCookie?.() || [];
+    ebayCookies = setCookies
+      .map(c => c.split(';')[0])
+      .filter(c => c)
+      .join('; ');
+    await resp.text(); // consume body
+  } catch(e) {
+    console.error('Failed to init eBay session:', e.message);
+  }
+}
+
 async function fetchEbayPage(url) {
-  const resp = await fetch(url, { headers: EBAY_HEADERS, redirect: 'follow' });
+  const headers = { ...EBAY_HEADERS };
+  if (ebayCookies) headers['Cookie'] = ebayCookies;
+  headers['Referer'] = 'https://www.ebay.com/';
+
+  const resp = await fetch(url, { headers, redirect: 'follow' });
+
+  // Update cookies from response
+  const setCookies = resp.headers.getSetCookie?.() || [];
+  if (setCookies.length) {
+    const existing = new Map(ebayCookies.split('; ').filter(c => c).map(c => {
+      const [k, ...v] = c.split('=');
+      return [k, v.join('=')];
+    }));
+    for (const sc of setCookies) {
+      const cookie = sc.split(';')[0];
+      const [k, ...v] = cookie.split('=');
+      existing.set(k, v.join('='));
+    }
+    ebayCookies = [...existing].map(([k, v]) => `${k}=${v}`).join('; ');
+  }
+
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return await resp.text();
 }
@@ -108,6 +153,9 @@ app.get("/api/scan", async (req, res) => {
   }, 15000);
 
   try {
+    send({ type: "log", message: "Initializing eBay session..." });
+    await initEbaySession();
+    await delay(1000, 2000);
     send({ type: "log", message: "Phase 1: Collecting eBay listings..." });
 
     const allListings = [];
