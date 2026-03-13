@@ -1,10 +1,6 @@
 const express = require("express");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const path = require("path");
 const cheerio = require("cheerio");
-
-puppeteer.use(StealthPlugin());
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
@@ -80,6 +76,21 @@ function identifyCard(title) {
   return null;
 }
 
+const EBAY_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+};
+
+async function fetchEbayPage(url) {
+  const resp = await fetch(url, { headers: EBAY_HEADERS, redirect: 'follow' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return await resp.text();
+}
+
 // SSE endpoint
 app.get("/api/scan", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -96,43 +107,7 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(': ping\n\n'); } catch(e) {}
   }, 15000);
 
-  let browser;
   try {
-    send({ type: "log", message: "Launching stealth browser..." });
-
-    browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        "--no-sandbox", "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-sync",
-        "--disable-translate",
-        "--no-first-run",
-        "--js-flags=--max-old-space-size=192",
-      ],
-    });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9" });
-
-    // Block images, CSS, fonts, media to save memory
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const type = req.resourceType();
-      if (['image', 'stylesheet', 'font', 'media', 'texttrack', 'websocket'].includes(type)) {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
-
-    // ===== PHASE 1: COLLECT ALL LISTINGS =====
     send({ type: "log", message: "Phase 1: Collecting eBay listings..." });
 
     const allListings = [];
@@ -164,26 +139,7 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-          // Wait for body to be available, handles redirects gracefully
-          try {
-            await page.waitForSelector('body', { timeout: 10000 });
-          } catch(e) {}
-          await delay(2000, 4000);
-
-          // Light scrolling to trigger lazy-loaded content (safe against context destruction)
-          try {
-            await page.evaluate(() => window.scrollBy(0, 800));
-            await delay(500, 1000);
-            await page.evaluate(() => window.scrollBy(0, 800));
-            await delay(500, 1000);
-          } catch(scrollErr) {
-            send({ type: "log", message: `  Scroll skipped (page may have redirected)` });
-            await delay(1000, 2000);
-          }
-
-          // Get page HTML and parse with cheerio
-          const html = await page.content();
+          const html = await fetchEbayPage(url);
           const $ = cheerio.load(html);
 
           const pageTitle = $('title').text();
@@ -255,9 +211,6 @@ app.get("/api/scan", async (req, res) => {
 
           send({ type: "log", message: `  Total matched so far: ${allListings.length}` });
 
-          // Navigate to blank page to free memory (avoids "execution context destroyed" errors)
-          await page.goto('about:blank', { timeout: 5000 }).catch(() => {});
-
         } catch (err) {
           send({ type: "error", message: `Search error on "${search.q}" page ${pageNum}: ${err.message}` });
         }
@@ -268,13 +221,6 @@ app.get("/api/scan", async (req, res) => {
     }
 
     send({ type: "log", message: `Phase 1 complete: ${allListings.length} listings found.` });
-
-    // Close browser to free memory before Phase 2
-    if (browser) {
-      await browser.close();
-      browser = null;
-      send({ type: "log", message: "Browser closed to free memory." });
-    }
 
     // ===== PHASE 2: PRICECHARTING LOOKUP =====
     send({ type: "log", message: "Phase 2: Looking up market prices on PriceCharting..." });
@@ -364,7 +310,6 @@ app.get("/api/scan", async (req, res) => {
     send({ type: "done" });
   } finally {
     clearInterval(keepAlive);
-    if (browser) await browser.close().catch(() => {});
     res.end();
   }
 });
