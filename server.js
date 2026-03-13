@@ -164,14 +164,23 @@ app.get("/api/scan", async (req, res) => {
         send({ type: "log", message: `Searching: "${search.q}" (page ${pageNum})...` });
 
         try {
-          await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+          // Wait for body to be available, handles redirects gracefully
+          try {
+            await page.waitForSelector('body', { timeout: 10000 });
+          } catch(e) {}
           await delay(2000, 4000);
 
-          // Light scrolling to trigger lazy-loaded content
-          await page.evaluate(() => window.scrollBy(0, 800));
-          await delay(500, 1000);
-          await page.evaluate(() => window.scrollBy(0, 800));
-          await delay(500, 1000);
+          // Light scrolling to trigger lazy-loaded content (safe against context destruction)
+          try {
+            await page.evaluate(() => window.scrollBy(0, 800));
+            await delay(500, 1000);
+            await page.evaluate(() => window.scrollBy(0, 800));
+            await delay(500, 1000);
+          } catch(scrollErr) {
+            send({ type: "log", message: `  Scroll skipped (page may have redirected)` });
+            await delay(1000, 2000);
+          }
 
           // Get page HTML and parse with cheerio
           const html = await page.content();
@@ -246,8 +255,8 @@ app.get("/api/scan", async (req, res) => {
 
           send({ type: "log", message: `  Total matched so far: ${allListings.length}` });
 
-          // Clear page memory between searches
-          await page.evaluate(() => { document.body.innerHTML = ''; });
+          // Navigate to blank page to free memory (avoids "execution context destroyed" errors)
+          await page.goto('about:blank', { timeout: 5000 }).catch(() => {});
 
         } catch (err) {
           send({ type: "error", message: `Search error on "${search.q}" page ${pageNum}: ${err.message}` });
