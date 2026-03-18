@@ -2,7 +2,7 @@ const express = require("express");
 const path = require("path");
 const cheerio = require("cheerio");
 
-// got-scraping is ESM-only, use dynamic import
+// got-scraping is ESM-only, use dynamic import (only needed for PriceCharting)
 let gotScraping;
 const gotReady = import("got-scraping").then(m => { gotScraping = m.gotScraping; });
 
@@ -17,174 +17,64 @@ function delay(min, max) {
   return new Promise((r) => setTimeout(r, Math.floor(Math.random() * (max - min + 1)) + min));
 }
 
-// ===== HUMAN-LIKE REQUEST ENGINE =====
+// ===== EBAY API (Browse API v1) =====
+const EBAY_APP_ID = process.env.EBAY_APP_ID;
+const EBAY_CERT_ID = process.env.EBAY_CERT_ID;
 
-// Rotate through realistic browser profiles
-const BROWSER_PROFILES = [
-  {
-    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    platform: "Win32",
-    lang: "en-US,en;q=0.9",
-  },
-  {
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    platform: "MacIntel",
-    lang: "en-US,en;q=0.9",
-  },
-  {
-    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-    platform: "Win32",
-    lang: "en-US,en;q=0.5",
-  },
-  {
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-    platform: "MacIntel",
-    lang: "en-US,en;q=0.9",
-  },
-  {
-    ua: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    platform: "Linux x86_64",
-    lang: "en-US,en;q=0.9",
-  },
-];
+let ebayToken = null;
+let ebayTokenExpiry = 0;
 
-// Session state to maintain cookies across requests like a real browser
-let sessionCookies = "";
-let currentProfile = BROWSER_PROFILES[Math.floor(Math.random() * BROWSER_PROFILES.length)];
-let requestCount = 0;
+async function getEbayToken() {
+  if (ebayToken && Date.now() < ebayTokenExpiry - 60000) return ebayToken;
 
-function rotateProfile() {
-  currentProfile = BROWSER_PROFILES[Math.floor(Math.random() * BROWSER_PROFILES.length)];
-  sessionCookies = "";
-  requestCount = 0;
-}
+  const credentials = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString("base64");
+  const resp = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": `Basic ${credentials}`,
+    },
+    body: "grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope",
+  });
 
-function buildHeaders(referer) {
-  const profile = currentProfile;
-  const headers = {
-    "User-Agent": profile.ua,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": profile.lang,
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Sec-Ch-Ua-Platform": `"${profile.platform.includes("Mac") ? "macOS" : profile.platform.includes("Win") ? "Windows" : "Linux"}"`,
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": referer ? "same-origin" : "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-  };
-  if (referer) headers["Referer"] = referer;
-  if (sessionCookies) headers["Cookie"] = sessionCookies;
-  return headers;
-}
-
-function extractCookies(response) {
-  const setCookies = response.headers["set-cookie"];
-  if (!setCookies) return;
-  const cookies = Array.isArray(setCookies) ? setCookies : [setCookies];
-  const pairs = cookies.map(c => c.split(";")[0]);
-  // Merge with existing cookies
-  const existing = sessionCookies ? sessionCookies.split("; ").reduce((m, p) => {
-    const [k, v] = p.split("=");
-    if (k) m[k] = v;
-    return m;
-  }, {}) : {};
-  for (const p of pairs) {
-    const [k, v] = p.split("=");
-    if (k) existing[k] = v;
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`eBay OAuth failed (${resp.status}): ${text}`);
   }
-  sessionCookies = Object.entries(existing).map(([k, v]) => `${k}=${v}`).join("; ");
+
+  const data = await resp.json();
+  ebayToken = data.access_token;
+  ebayTokenExpiry = Date.now() + (data.expires_in * 1000);
+  return ebayToken;
 }
 
-// Proxy support: set PROXY_URL env var (e.g., http://user:pass@proxy:port)
-function getProxyUrl() {
-  return process.env.PROXY_URL || null;
-}
+async function ebaySearch(query, categoryId, limit, offset, filters, sort) {
+  const token = await getEbayToken();
 
-async function fetchEbayPage(url, send, maxRetries = 3) {
-  const proxyUrl = getProxyUrl();
+  const params = new URLSearchParams();
+  params.set("q", query);
+  if (categoryId) params.set("category_ids", categoryId);
+  params.set("limit", String(Math.min(limit, 200)));
+  params.set("offset", String(offset));
+  if (filters) params.set("filter", filters);
+  if (sort) params.set("sort", sort);
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      // Human-like: first request in session hits the homepage to get cookies
-      if (requestCount === 0) {
-        try {
-          const homeOpts = {
-            url: "https://www.ebay.com/",
-            headers: buildHeaders(null),
-            headerGeneratorOptions: {
-              browsers: [{ name: "chrome", minVersion: 120, maxVersion: 126 }],
-              devices: ["desktop"],
-              locales: ["en-US"],
-              operatingSystems: ["windows", "macos"],
-            },
-            followRedirect: true,
-            timeout: { request: 30000 },
-            retry: { limit: 0 },
-            responseType: "text",
-            https: { rejectUnauthorized: true },
-          };
-          if (proxyUrl) homeOpts.proxyUrl = proxyUrl;
-          const homeResp = await gotScraping(homeOpts);
-          extractCookies(homeResp);
-          await delay(1500, 3000);
-        } catch (e) {
-          // Non-fatal, continue anyway
-        }
-        requestCount++;
-      }
+  const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`;
 
-      const opts = {
-        url,
-        headers: buildHeaders("https://www.ebay.com/sch/i.html"),
-        headerGeneratorOptions: {
-          browsers: [{ name: "chrome", minVersion: 120, maxVersion: 126 }],
-          devices: ["desktop"],
-          locales: ["en-US"],
-          operatingSystems: ["windows", "macos"],
-        },
-        followRedirect: true,
-        timeout: { request: 30000 },
-        retry: { limit: 0 },
-        responseType: "text",
-        https: { rejectUnauthorized: true },
-      };
-      if (proxyUrl) opts.proxyUrl = proxyUrl;
+  const resp = await fetch(url, {
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+      "X-EBAY-C-ENDUSERCTX": "affiliateCampaignId=<ePNCampaignId>,affiliateReferenceId=<referenceId>",
+    },
+  });
 
-      const response = await gotScraping(opts);
-      extractCookies(response);
-      requestCount++;
-
-      const html = response.body;
-      const $ = cheerio.load(html);
-      const title = $("title").text();
-
-      if (title.includes("Pardon") || title.includes("Security") || title.includes("Robot")) {
-        if (attempt < maxRetries) {
-          // Exponential backoff + rotate browser profile
-          const backoff = Math.pow(2, attempt + 1) * 10000 + Math.random() * 10000;
-          send({ type: "log", message: `  Bot challenge detected. Rotating profile, waiting ${Math.round(backoff/1000)}s (attempt ${attempt + 1}/${maxRetries})...` });
-          rotateProfile();
-          await delay(backoff, backoff + 5000);
-          continue;
-        }
-        return { html: "", blocked: true };
-      }
-
-      return { html, blocked: false };
-    } catch (err) {
-      if (attempt < maxRetries) {
-        const backoff = (attempt + 1) * 5000;
-        send({ type: "log", message: `  Request error: ${err.message}. Retrying in ${backoff/1000}s...` });
-        await delay(backoff, backoff + 3000);
-        continue;
-      }
-      throw err;
-    }
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`eBay API error (${resp.status}): ${text.substring(0, 200)}`);
   }
+
+  return resp.json();
 }
 
 // All 102 base set cards
@@ -258,84 +148,35 @@ function identifyCard(title) {
   return null;
 }
 
-function parseListings($) {
-  const listings = [];
-
-  const selectorSets = [
-    { container: 'li.s-card', title: '.s-card__title', price: '.s-card__price' },
-    { container: 'li.s-item', title: '.s-item__title', price: '.s-item__price' },
-  ];
-
-  for (const { container, title: titleSel, price: priceSel } of selectorSets) {
-    if ($(container).length === 0) continue;
-
-    $(container).each((_, el) => {
-      const $el = $(el);
-      const title = ($el.find(titleSel).text() || '').trim()
-        .replace(/Opens in a new window or tab$/i, '')
-        .replace(/^New Listing/i, '').trim();
-      const priceText = ($el.find(priceSel).text() || '').trim();
-      const link = $el.find('a[href*="/itm/"]').attr('href') || '';
-      const fullText = $el.text().toLowerCase();
-
-      if (!title || title === 'Shop on eBay' || !link.includes('/itm/')) return;
-
-      const auctionSignals = [];
-      if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid');
-      if (/time left/i.test(fullText)) auctionSignals.push('time-left');
-
-      let location = '';
-      const locMatch = fullText.match(/located\s+in\s+(united states|canada|united kingdom|great britain|france|germany|australia|japan|italy|spain|china|mexico|brazil|india|netherlands|south korea|taiwan|hong kong|singapore|thailand|philippines|ireland|new zealand|sweden|switzerland|belgium|austria|poland|denmark|norway|finland|portugal|czech republic|greece|israel|turkey|south africa|romania|hungary|malaysia|indonesia|vietnam|colombia|chile|argentina|peru|ukraine|croatia|bulgaria|slovakia|slovenia|estonia|latvia|lithuania|luxembourg|malta|cyprus|iceland)/i);
-      if (locMatch) location = locMatch[1].trim();
-
-      let timeLeft = '';
-      const timeMatch = fullText.match(/(\d+[hd]\s*\d+[ms]?\s*left|\d+m\s*\d*s?\s*left|\d+s\s*left)/i);
-      if (timeMatch) timeLeft = timeMatch[1].replace(/\s*left/i, '').trim();
-
-      const condition = ($el.find('.SECONDARY_INFO, [class*="subtitle"], [class*="condition"], [class*="Condition"]').text() || '').trim().toLowerCase();
-
-      listings.push({ title, priceText, link, auctionSignals, location, timeLeft, fullText, condition });
-    });
-
-    if (listings.length > 0) return listings;
-  }
-
-  $('a[href*="/itm/"]').each((_, el) => {
-    const $a = $(el);
-    const link = $a.attr('href') || '';
-    if (!link.includes('/itm/')) return;
-
-    const $container = $a.closest('[class*="card"], [class*="item"], li').first();
-    if (!$container.length) return;
-
-    const text = $container.text().replace(/\s+/g, ' ').trim();
-    const title = ($container.find('[class*="title"], [class*="Title"]').first().text() || '').trim()
-      .replace(/Opens in a new window or tab$/i, '')
-      .replace(/^New Listing/i, '').trim();
-    if (!title) return;
-
-    const priceText = ($container.find('[class*="price"], [class*="Price"]').first().text() || '').trim();
-    const fullText = text.toLowerCase();
-
-    const auctionSignals = [];
-    if (/\bbid\b/.test(fullText) && !/buy it now/i.test(fullText)) auctionSignals.push('bid');
-    if (/time left/i.test(fullText)) auctionSignals.push('time-left');
-
-    let location = '';
-    const locMatch2 = fullText.match(/located\s+in\s+(united states|canada|united kingdom|great britain|france|germany|australia|japan|italy|spain|china|mexico|brazil|india|netherlands|south korea|taiwan|hong kong|singapore|thailand|philippines|ireland|new zealand|sweden|switzerland|belgium|austria|poland|denmark|norway|finland|portugal|czech republic|greece|israel|turkey|south africa|romania|hungary|malaysia|indonesia|vietnam|colombia|chile|argentina|peru|ukraine|croatia|bulgaria|slovakia|slovenia|estonia|latvia|lithuania|luxembourg|malta|cyprus|iceland)/i);
-    if (locMatch2) location = locMatch2[1].trim();
-
-    let timeLeft = '';
-    const timeMatch2 = fullText.match(/(\d+[hd]\s*\d+[ms]?\s*left|\d+m\s*\d*s?\s*left|\d+s\s*left)/i);
-    if (timeMatch2) timeLeft = timeMatch2[1].replace(/\s*left/i, '').trim();
-
-    listings.push({ title, priceText, link, auctionSignals, location, timeLeft });
-  });
-
-  return listings;
+function extractPrice(item) {
+  if (item.price) return parseFloat(item.price.value);
+  if (item.currentBidPrice) return parseFloat(item.currentBidPrice.value);
+  return null;
 }
 
-// SSE endpoint
+function extractLocation(item) {
+  if (item.itemLocation) {
+    const parts = [];
+    if (item.itemLocation.city) parts.push(item.itemLocation.city);
+    if (item.itemLocation.country) parts.push(item.itemLocation.country);
+    return parts.join(", ");
+  }
+  return "";
+}
+
+function countryFromLocation(loc) {
+  const l = (loc || "").toUpperCase();
+  if (l.includes("US") || l.includes("UNITED STATES")) return "United States";
+  if (l.includes("CA") || l.includes("CANADA")) return "Canada";
+  if (l.includes("GB") || l.includes("UNITED KINGDOM")) return "United Kingdom";
+  if (l.includes("FR") || l.includes("FRANCE")) return "France";
+  if (l.includes("DE") || l.includes("GERMANY")) return "Germany";
+  if (l.includes("AU") || l.includes("AUSTRALIA")) return "Australia";
+  if (l.includes("JP") || l.includes("JAPAN")) return "Japan";
+  return loc || "";
+}
+
+// SSE endpoint — Base Set scan
 app.get("/api/scan", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -350,118 +191,62 @@ app.get("/api/scan", async (req, res) => {
     try { res.write(': ping\n\n'); } catch(e) {}
   }, 15000);
 
-  // Fresh session for each scan
-  rotateProfile();
-
   try {
-    send({ type: "log", message: "Phase 1: Collecting eBay listings..." });
+    send({ type: "log", message: "Phase 1: Collecting eBay listings via API..." });
 
     const allListings = [];
     const seenIds = new Set();
     const MAX_FOUND = 1000;
-    const searchStartTime = Date.now();
-    const SEARCH_TIME_LIMIT = 8 * 60 * 1000;
 
-    const searches = [
-      { q: '"psa 10" unlimited base set pokemon -shadowless -"1st edition" -1st -bgs -cgc -pack -booster -"base set 2" -"base ii"', pages: 8 },
-    ];
+    const query = "psa 10 unlimited base set pokemon -shadowless -1st -bgs -cgc -pack -booster";
+    const category = "183454"; // Pokemon cards
+    const filters = "price:[25..25000],priceCurrency:USD";
+    const pageSize = 200;
+    const maxPages = 5; // 200 * 5 = 1000 max items from API
 
-    let consecutiveBlocks = 0;
-    let hitCap = false;
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * pageSize;
+      send({ type: "log", message: `Fetching page ${page + 1}/${maxPages} (offset ${offset})...` });
 
-    for (const search of searches) {
-      if (hitCap) break;
-      for (let pageNum = 1; pageNum <= search.pages; pageNum++) {
-        if (hitCap) break;
-        if (consecutiveBlocks >= 3) {
-          send({ type: "log", message: `Too many consecutive blocks. Stopping search with ${allListings.length} listings.` });
-          hitCap = true;
-          break;
-        }
-        if (Date.now() - searchStartTime >= SEARCH_TIME_LIMIT) {
-          send({ type: "log", message: `Time limit reached. Found ${allListings.length} listings.` });
-          hitCap = true;
-          break;
-        }
+      try {
+        const result = await ebaySearch(query, category, pageSize, offset, filters, "newlyListed");
 
-        const encoded = encodeURIComponent(search.q);
-        const url = `https://www.ebay.com/sch/i.html?_nkw=${encoded}&_sacat=183454&LH_TitleDesc=1&_ipg=240&_sop=15&_pgn=${pageNum}`;
+        const items = result.itemSummaries || [];
+        const total = result.total || 0;
+        send({ type: "log", message: `  Got ${items.length} items (${total} total available)` });
 
-        send({ type: "log", message: `Searching: page ${pageNum}/${search.pages}...` });
+        if (items.length === 0) break;
 
-        try {
-          const result = await fetchEbayPage(url, send);
-          if (result.blocked) {
-            consecutiveBlocks++;
-            send({ type: "log", message: `  Still blocked after retries. (${consecutiveBlocks}/3 consecutive blocks)` });
-            continue;
-          }
+        for (const item of items) {
+          const itemId = item.itemId;
+          if (!itemId || seenIds.has(itemId)) continue;
 
-          consecutiveBlocks = 0;
-          const $ = cheerio.load(result.html);
+          const title = item.title || "";
+          const cardName = identifyCard(title);
+          if (!cardName) continue;
 
-          const pageTitle = $('title').text();
-          send({ type: "log", message: `  Page title: "${pageTitle.substring(0, 60)}..."` });
+          const price = extractPrice(item);
+          if (price === null || price <= 25 || price >= 25000) continue;
 
-          const listings = parseListings($);
-          send({ type: "log", message: `  Found ${listings.length} listings on this page` });
+          const isAuction = (item.buyingOptions || []).includes("AUCTION");
+          const location = countryFromLocation(extractLocation(item));
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${itemId}`;
 
-          for (const l of listings) {
-            const idMatch = l.link.match(/\/itm\/(\d+)/);
-            const itemId = idMatch ? idMatch[1] : null;
-            if (!itemId || seenIds.has(itemId)) continue;
-            if (itemId === '157236327643') continue;
+          seenIds.add(itemId);
+          allListings.push({ title, cardName, price, link: ebayUrl, isAuction, itemId, location });
 
-            const cardName = identifyCard(l.title);
-            if (!cardName) continue;
+          send({ type: "found", count: allListings.length, latest: cardName, price });
 
-            const ft = (l.fullText || '').toLowerCase();
-            const cond = (l.condition || '').toLowerCase();
-            if (/\b(ungraded|lightly played|heavily played|excellent|pre-owned|cgc\s*\d|bgs\s*\d|sgc\s*\d|ags\s*\d)\b/i.test(ft)) continue;
-            if (/\b(ungraded|pre-owned|lightly played|heavily played|excellent|used|open box)\b/i.test(cond)) continue;
-
-            seenIds.add(itemId);
-
-            const priceMatch = l.priceText.match(/\$([\d,]+\.?\d*)/);
-            const price = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, "")) : null;
-            if (price === null) continue;
-            if (price <= 25 || price >= 25000) continue;
-
-            const isAuction = l.auctionSignals.length > 0;
-
-            allListings.push({
-              title: l.title,
-              cardName,
-              price,
-              link: l.link.split("?")[0],
-              isAuction,
-              itemId,
-              location: l.location || '',
-            });
-
-            send({ type: "found", count: allListings.length, latest: cardName, price });
-
-            if (allListings.length >= MAX_FOUND) {
-              hitCap = true;
-              break;
-            }
-          }
-
-          send({ type: "log", message: `  Total matched so far: ${allListings.length}` });
-
-          if (listings.length === 0) {
-            send({ type: "log", message: `  No listings on page, moving on.` });
-            break;
-          }
-
-        } catch (err) {
-          send({ type: "error", message: `Search error: ${err.message}` });
+          if (allListings.length >= MAX_FOUND) break;
         }
 
-        // Human-like variable delay between pages (10-25 seconds)
-        const pageDelay = 10000 + Math.random() * 15000;
-        send({ type: "log", message: `  Waiting ${Math.round(pageDelay/1000)}s before next page...` });
-        await delay(pageDelay, pageDelay + 2000);
+        send({ type: "log", message: `  Total matched so far: ${allListings.length}` });
+
+        if (allListings.length >= MAX_FOUND) break;
+        if (offset + items.length >= total) break;
+      } catch (err) {
+        send({ type: "error", message: `API error: ${err.message}` });
+        break;
       }
     }
 
@@ -485,7 +270,7 @@ app.get("/api/scan", async (req, res) => {
 
         const pcResp = await gotScraping({
           url: directUrl,
-          headers: { 'User-Agent': currentProfile.ua },
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
           responseType: 'text',
           timeout: { request: 15000 },
           retry: { limit: 1 },
@@ -603,82 +388,63 @@ app.get("/api/scan-card", async (req, res) => {
     return;
   }
 
-  // Fresh session for each scan
-  rotateProfile();
-
   try {
-    send({ type: "log", message: `Searching eBay for ${cardName} PSA 10 (max $${maxPrice})...` });
+    send({ type: "log", message: `Searching eBay API for ${cardName} PSA 10 (max $${maxPrice})...` });
 
     const allListings = [];
     const seenIds = new Set();
 
-    const searchQuery = `"psa 10" ${cardName} -bgs -cgc -sgc -ags -lot -bundle -reprint -japanese -japan -jpn -korean -chinese -svk`;
-    const pages = 4;
+    const query = `psa 10 ${cardName} -bgs -cgc -sgc -ags -lot -bundle -reprint -japanese -japan`;
+    const filters = `price:[0..${maxPrice}],priceCurrency:USD`;
+    const pageSize = 200;
+    const maxPages = 4;
 
-    for (let pageNum = 1; pageNum <= pages; pageNum++) {
-      const encoded = encodeURIComponent(searchQuery);
-      const url = `https://www.ebay.com/sch/i.html?_nkw=${encoded}&_sacat=0&LH_TitleDesc=0&_ipg=240&_sop=15&_pgn=${pageNum}`;
-
-      send({ type: "log", message: `Page ${pageNum}/${pages}...` });
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * pageSize;
+      send({ type: "log", message: `Page ${page + 1}/${maxPages}...` });
 
       try {
-        const result = await fetchEbayPage(url, send);
-        if (result.blocked) {
-          send({ type: "log", message: `  Blocked on page ${pageNum}, skipping.` });
-          continue;
-        }
+        const result = await ebaySearch(query, null, pageSize, offset, filters, "newlyListed");
+        const items = result.itemSummaries || [];
+        const total = result.total || 0;
+        send({ type: "log", message: `  ${items.length} items (${total} total)` });
 
-        const $ = cheerio.load(result.html);
-        const listings = parseListings($);
-        send({ type: "log", message: `  ${listings.length} listings on page` });
+        if (items.length === 0) break;
 
-        for (const l of listings) {
-          const idMatch = l.link.match(/\/itm\/(\d+)/);
-          const itemId = idMatch ? idMatch[1] : null;
+        for (const item of items) {
+          const itemId = item.itemId;
           if (!itemId || seenIds.has(itemId)) continue;
 
-          const t = l.title.toLowerCase();
-          if (!/psa\s*10/i.test(l.title)) continue;
+          const title = item.title || "";
+          const t = title.toLowerCase();
+
+          if (!/psa\s*10/i.test(title)) continue;
           if (!t.includes(cardName.toLowerCase())) continue;
-          if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(l.title)) continue;
-          if (/\b(japanese|japan|jpn|jp|korean|chinese|french\s+card|german\s+card|svk|chi|kor)\b/i.test(t)) continue;
-          const ft = (l.fullText || '').toLowerCase();
-          if (/\b(ungraded|lightly played|heavily played|cgc\s*\d|bgs\s*\d|sgc\s*\d|ags\s*\d)\b/i.test(ft)) continue;
-          if (/\b(japanese|japan|jpn|jp\b|svk)\b/i.test(ft)) continue;
+          if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) continue;
+          if (/\b(japanese|japan|jpn|jp|korean|chinese|svk)\b/i.test(t)) continue;
 
-          seenIds.add(itemId);
-
-          const priceMatch = l.priceText.match(/\$([\d,]+\.?\d*)/);
-          const price = priceMatch ? parseFloat(priceMatch[1].replace(/,/g, "")) : null;
+          const price = extractPrice(item);
           if (price === null || price > maxPrice) continue;
 
-          const isAuction = l.auctionSignals.length > 0;
+          const isAuction = (item.buyingOptions || []).includes("AUCTION");
+          const location = countryFromLocation(extractLocation(item));
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${itemId}`;
 
-          allListings.push({
-            title: l.title,
-            cardName,
-            price,
-            link: l.link.split("?")[0],
-            isAuction,
-            itemId,
-            location: l.location || '',
-            timeLeft: l.timeLeft || '',
-          });
+          seenIds.add(itemId);
+          allListings.push({ title, cardName, price, link: ebayUrl, isAuction, itemId, location });
 
-          send({ type: "found", count: allListings.length, latest: l.title.substring(0, 50), price });
+          send({ type: "found", count: allListings.length, latest: title.substring(0, 50), price });
         }
 
         send({ type: "log", message: `  Total matched: ${allListings.length}` });
-        if (listings.length === 0) break;
+        if (offset + items.length >= total) break;
       } catch (err) {
-        send({ type: "error", message: `Search error: ${err.message}` });
+        send({ type: "error", message: `API error: ${err.message}` });
+        break;
       }
-
-      // Human-like variable delay
-      const pageDelay = 10000 + Math.random() * 15000;
-      await delay(pageDelay, pageDelay + 2000);
     }
 
+    // PriceCharting lookup
     send({ type: "log", message: `Looking up market prices on PriceCharting...` });
     const pcCache = {};
 
@@ -688,7 +454,7 @@ app.get("/api/scan-card", async (req, res) => {
         const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(searchTerm)}&type=prices`;
         const pcResp = await gotScraping({
           url: searchUrl,
-          headers: { 'User-Agent': currentProfile.ua },
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
           responseType: 'text',
           timeout: { request: 15000 },
           retry: { limit: 1 },
@@ -700,7 +466,7 @@ app.get("/api/scan-card", async (req, res) => {
           const pcUrl = href.startsWith('http') ? href : 'https://www.pricecharting.com' + href;
           const detailResp = await gotScraping({
             url: pcUrl,
-            headers: { 'User-Agent': currentProfile.ua },
+            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
             responseType: 'text',
             timeout: { request: 15000 },
             retry: { limit: 1 },
@@ -742,19 +508,6 @@ app.get("/api/scan-card", async (req, res) => {
       const pctOverMarket = marketPrice != null && marketPrice > 0
         ? ((listing.price - marketPrice) / marketPrice) * 100
         : null;
-      let endTime = '';
-      let totalMinutes = 0;
-      if (listing.timeLeft) {
-        const ts = listing.timeLeft.toLowerCase();
-        const dM = ts.match(/(\d+)\s*d/);
-        const hM = ts.match(/(\d+)\s*h/);
-        const mM = ts.match(/(\d+)\s*m/);
-        if (dM) totalMinutes += parseInt(dM[1]) * 1440;
-        if (hM) totalMinutes += parseInt(hM[1]) * 60;
-        if (mM) totalMinutes += parseInt(mM[1]);
-        const end = new Date(Date.now() + totalMinutes * 60000);
-        endTime = end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      }
 
       const item = {
         name: cardName,
@@ -767,9 +520,6 @@ app.get("/api/scan-card", async (req, res) => {
         pricechartingUrl: pc.pricechartingUrl,
         verified: !!marketPrice,
         location: listing.location,
-        timeLeft: listing.timeLeft,
-        endTime,
-        totalMinutes,
       };
 
       if (listing.isAuction) {
@@ -784,7 +534,11 @@ app.get("/api/scan-card", async (req, res) => {
       if (b.pctOverMarket == null) return -1;
       return a.pctOverMarket - b.pctOverMarket;
     });
-    auctions.sort((a, b) => a.totalMinutes - b.totalMinutes);
+    auctions.sort((a, b) => {
+      if (a.pctOverMarket == null) return 1;
+      if (b.pctOverMarket == null) return -1;
+      return a.pctOverMarket - b.pctOverMarket;
+    });
 
     send({ type: "log", message: `Done! ${buyItNow.length} Buy It Now, ${auctions.length} Auctions.` });
     send({ type: "result", buyItNow, auctions, cardName });
