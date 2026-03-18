@@ -122,11 +122,21 @@ const BASE_SET_CARDS = [
 
 function identifyCard(title) {
   const t = title.toLowerCase();
+  // Must be PSA 10
   if (!/psa\s*10/i.test(title)) return null;
+  // Exclude other graders
   if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) return null;
+  // Exclude non-slab items
   if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|collection|wrapper|artwork|thick\s*font|thin\s*font|foil|additional\s*game\s*cards)\b/i.test(t)) return null;
+  // Exclude raw/ungraded marketed as PSA quality
   if (/\b(raw|ungraded|comp|comparable|quality|worthy|potential|candidate|like\s+psa|nm|near\s*mint|excellent|lp|played)\b/i.test(t)) return null;
-  if (t.includes("shadowless") || t.includes("1st edition") || t.includes("first edition")) return null;
+  // Exclude shadowless and 1st edition
+  if (/shadowless|1st\s*edition|first\s*edition|1st\s*ed/i.test(t)) return null;
+  // Exclude Base Set 2, Celebrations, Classic Collection, Legendary Collection, other reprints
+  if (/base\s*set\s*2|base\s*ii|base\s*2\b|celebrations|classic\s*collection|legendary\s*collection|evolutions|reprint|promo|world\s*championship/i.test(t)) return null;
+  // Exclude Japanese/foreign
+  if (/\b(japanese|japan|jpn|jp\b|korean|chinese|french|german|italian|spanish)\b/i.test(t)) return null;
+  // Exclude trainer cards and energy cards
   if (/\b(doll|computer search|devolution spray|impostor|item finder|lass|pokemon breeder|pokemon trader|scoop up|super energy removal|defender|energy retrieval|full heal|maintenance|pluspower|pokemon center|pokemon flute|pokedex|professor oak|revive|super potion|bill|energy removal|gust of wind|potion|switch|double colorless|fighting energy|fire energy|grass energy|lightning energy|psychic energy|water energy)\b/i.test(t)) return null;
 
   const numMatch = t.match(/(?:#|no\.?\s*)?(\d{1,3})\s*\/\s*102/) || (t.includes('base set') && t.match(/(?:#|no\.?\s*)(\d{1,3})\b/));

@@ -45,6 +45,9 @@
     .badge-unverified { background: #7c2d12; color: #fb923c; }
     .empty { text-align: center; color: #64748b; padding: 30px; }
     .count-badge { background: #1e293b; color: #fbbf24; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin-left: 10px; }
+    .tab-btn { padding: 10px 24px; font-size: 1rem; font-weight: 600; border: 2px solid #334155; border-radius: 8px; cursor: pointer; background: #1e293b; color: #94a3b8; transition: all 0.15s; }
+    .tab-btn:hover { border-color: #f59e0b; color: #e2e8f0; }
+    .tab-btn.active { background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; border-color: #f59e0b; }
   </style>
 </head>
 <body>
@@ -66,18 +69,19 @@
       <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
       <table id="binTable">
         <thead>
-          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table>
       <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
       <table id="auctionTable">
         <thead>
-          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
+
   </div>
 
   <script>
@@ -158,10 +162,11 @@
       };
     }
 
-    function renderTable(selector, items) {
+    function renderTable(selector, items, showTime) {
       const tbody = document.querySelector(selector);
+      const cols = showTime ? 10 : 8;
       if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No items found</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">No items found</td></tr>`;
         return;
       }
       let html = '';
@@ -177,11 +182,21 @@
         const pcLink = item.pricechartingUrl
           ? `<a href="${item.pricechartingUrl}" target="_blank">View</a>`
           : 'N/A';
+        const timeCols = showTime
+          ? `<td>${item.timeLeft || '—'}</td><td>${item.endTime || '—'}</td>`
+          : '';
+        const pctClass = item.pctOverMarket != null ? (item.pctOverMarket < 0 ? 'negative' : 'positive') : '';
+        const pctText = item.pctOverMarket != null
+          ? (item.pctOverMarket < 0 ? item.pctOverMarket.toFixed(1) + '%' : '+' + item.pctOverMarket.toFixed(1) + '%')
+          : 'N/A';
         html += `<tr>
           <td>${item.name}${badge}</td>
           <td class="price">$${item.price.toFixed(2)}</td>
           <td>${mp}</td>
           <td class="${diffClass}">${diffText}</td>
+          <td class="${pctClass}">${pctText}</td>
+          ${timeCols}
+          <td>${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
           <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
           <td>${pcLink}</td>
         </tr>`;
