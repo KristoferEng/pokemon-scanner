@@ -894,7 +894,7 @@ app.get("/api/ending-auctions", async (req, res) => {
           allAuctions.push({
             name: baseCard || displayName, title, price, marketPrice, difference, pctOverMarket,
             ebayUrl, pricechartingUrl, location, verified: !!marketPrice,
-            endTime: endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            endTime: endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' }),
             minutesLeft: Math.round(minutesLeft),
           });
         }

@@ -112,7 +112,7 @@
       <div id="endingAuctionsLoading" class="empty" style="display:none;">Loading ending auctions...</div>
       <table id="endingAuctionsTable">
         <thead>
-          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Savings</th><th>% Below Market</th><th>Ends In</th><th>End Time</th><th>Location</th><th>eBay</th></tr>
+          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Savings</th><th>% Below Market</th><th>Ends In</th><th>End Time (PT)</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -270,7 +270,7 @@
         loading.style.display = 'none';
 
         if (!data.auctions || !data.auctions.length) {
-          tbody.innerHTML = '<tr><td colspan="9" class="empty">No auctions ending in the next 60 minutes</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10" class="empty">No auctions ending in the next 60 minutes</td></tr>';
           return;
         }
 
@@ -280,13 +280,15 @@
           const savingsText = savings != null
             ? (item.difference < 0 ? '<span class="negative">$' + savings + ' below</span>' : '<span class="positive">$' + savings + ' above</span>')
             : 'N/A';
-          const mp = item.marketPrice != null ? '$' + item.marketPrice.toFixed(2) : 'N/A';
+          const mp = item.marketPrice != null ? '$' + item.marketPrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
           const pctClass = item.pctOverMarket != null ? (item.pctOverMarket < 0 ? 'negative' : 'positive') : '';
           const pctText = item.pctOverMarket != null
             ? (item.pctOverMarket < 0 ? item.pctOverMarket.toFixed(1) + '%' : '+' + item.pctOverMarket.toFixed(1) + '%')
             : 'N/A';
           const timeClass = item.minutesLeft <= 10 ? 'time-urgent' : item.minutesLeft <= 30 ? 'time-warn' : '';
           const hotBadge = item.difference != null && item.difference < -50 ? '<span class="badge badge-hot">HOT</span>' : '';
+          const pcLink = item.pricechartingUrl
+            ? `<a href="${item.pricechartingUrl}" target="_blank">View</a>` : '—';
 
           html += `<tr>
             <td>${item.name}${hotBadge}</td>
@@ -295,15 +297,16 @@
             <td>${savingsText}</td>
             <td class="${pctClass}">${pctText}</td>
             <td class="${timeClass}">${item.minutesLeft}m</td>
-            <td>${item.endTime}</td>
+            <td>${item.endTime} PT</td>
             <td>${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
             <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
+            <td>${pcLink}</td>
           </tr>`;
         }
         tbody.innerHTML = html;
       } catch (e) {
         loading.style.display = 'none';
-        tbody.innerHTML = '<tr><td colspan="9" class="empty">Error loading auctions: ' + e.message + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">Error loading auctions: ' + e.message + '</td></tr>';
       }
     }
 
