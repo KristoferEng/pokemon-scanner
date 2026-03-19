@@ -79,13 +79,7 @@
     <div class="tab-content active" id="tab-deals">
       <button id="goBtn" onclick="startScan()">Run Live Scan</button>
 
-      <div class="stats" id="stats" style="display:none;">
-        <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
-        <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Priced</div></div>
-        <div class="stat"><div class="stat-value" id="phase">1/2</div><div class="stat-label">Phase</div></div>
-      </div>
-
-      <div id="logContainer"></div>
+      <div id="logContainer" style="display:none;"></div>
 
       <div id="dealsResults">
         <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
@@ -159,62 +153,68 @@
     }
 
     // ===== DEALS TAB =====
-    function startScan() {
+    async function startScan() {
       const btn = document.getElementById('goBtn');
       btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      document.getElementById('lastScanInfo').textContent = 'Scan in progress...';
 
-      document.getElementById('stats').style.display = 'flex';
-      document.getElementById('logContainer').innerHTML = '';
-      document.querySelector('#binTable tbody').innerHTML = '';
-      document.querySelector('#auctionTable tbody').innerHTML = '';
-      document.getElementById('foundCount').textContent = '0';
-      document.getElementById('verifiedCount').textContent = '0';
-      document.getElementById('phase').textContent = '1/2';
-
-      addLog('Starting scan...', 'info');
-
-      const es = new EventSource('/api/scan');
-      es.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        if (data.type === 'log') {
-          if (data.message.includes('Phase 2')) document.getElementById('phase').textContent = '2/2';
-          addLog(data.message, 'info');
-        } else if (data.type === 'found') {
-          document.getElementById('foundCount').textContent = data.count;
-          addLog(`Found: ${data.latest} ($${data.price.toFixed(2)}) - Total: ${data.count}`, 'success');
-        } else if (data.type === 'verified') {
-          document.getElementById('verifiedCount').textContent = data.count;
-        } else if (data.type === 'error') {
-          addLog(`ERROR: ${data.message}`, 'error');
-        } else if (data.type === 'result') {
-          document.getElementById('binCount').textContent = data.buyItNow.length;
-          document.getElementById('auctionCount').textContent = data.auctions.length;
-          renderDealTable('#binTable tbody', data.buyItNow);
-          renderDealTable('#auctionTable tbody', data.auctions);
-        } else if (data.type === 'done') {
-          addLog('Scan complete!', 'success');
-          btn.disabled = false;
-          es.close();
+      try {
+        const resp = await fetch('/api/trigger-scan', { method: 'POST' });
+        const data = await resp.json();
+        if (data.status === 'already_running') {
+          document.getElementById('lastScanInfo').textContent = 'Scan already in progress...';
         }
-      };
-      es.onerror = () => { addLog('Connection lost.', 'error'); btn.disabled = false; es.close(); };
+        // Poll for completion
+        const poll = setInterval(async () => {
+          const r = await fetch('/api/cached-results');
+          const d = await r.json();
+          if (!d.scanInProgress) {
+            clearInterval(poll);
+            btn.disabled = false;
+            btn.textContent = 'Run Live Scan';
+            if (d.results) {
+              document.getElementById('binCount').textContent = d.results.buyItNow.length;
+              document.getElementById('auctionCount').textContent = d.results.auctions.length;
+              renderDealTable('#binTable tbody', d.results.buyItNow);
+              renderDealTable('#auctionTable tbody', d.results.auctions);
+            }
+            if (d.lastScanTime) {
+              document.getElementById('lastScanInfo').textContent =
+                'Last scan: ' + new Date(d.lastScanTime).toLocaleString() + ' — auto-refreshes hourly';
+            }
+          }
+        }, 5000);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Run Live Scan';
+      }
     }
 
     async function loadCached() {
       try {
         const resp = await fetch('/api/cached-results');
         const data = await resp.json();
-        if (data.lastScanTime) {
+        if (data.scanInProgress) {
+          const btn = document.getElementById('goBtn');
+          btn.disabled = true;
+          btn.textContent = 'Scanning...';
+          document.getElementById('lastScanInfo').textContent =
+            (data.lastScanTime ? 'Last scan: ' + new Date(data.lastScanTime).toLocaleString() + ' — ' : '') + 'Scanning...';
+        } else if (data.lastScanTime) {
           const t = new Date(data.lastScanTime);
           document.getElementById('lastScanInfo').textContent =
-            'Last scan: ' + t.toLocaleString() + (data.scanInProgress ? ' (scanning...)' : ' — auto-refreshes hourly');
+            'Last scan: ' + t.toLocaleString() + ' — auto-refreshes hourly';
+          const btn = document.getElementById('goBtn');
+          btn.disabled = false;
+          btn.textContent = 'Run Live Scan';
         }
         if (data.results) {
           document.getElementById('binCount').textContent = data.results.buyItNow.length;
           document.getElementById('auctionCount').textContent = data.results.auctions.length;
           renderDealTable('#binTable tbody', data.results.buyItNow);
           renderDealTable('#auctionTable tbody', data.results.auctions);
-        } else if (data.scanInProgress) {
+        } else if (data.scanInProgress && !data.results) {
           document.getElementById('lastScanInfo').textContent = 'First scan in progress... refresh in a minute.';
         }
       } catch {}

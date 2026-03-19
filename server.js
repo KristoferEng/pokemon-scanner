@@ -604,7 +604,25 @@ function loadCache() {
 loadCache();
 
 // Register all API routes up front
-app.get("/api/cached-results", (req, res) => {
+app.post("/api/trigger-scan", (req, res) => {
+  if (scanInProgress) {
+    return res.json({ status: "already_running" });
+  }
+  runAutoScan().catch(() => {});
+  res.json({ status: "started" });
+});
+
+app.get("/api/cached-results", async (req, res) => {
+  // If data is stale (past the next clock hour), trigger a refresh
+  if (lastScanTime && !scanInProgress) {
+    const lastScan = new Date(lastScanTime);
+    const nextHour = new Date(lastScan);
+    nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+    if (Date.now() >= nextHour.getTime()) {
+      console.log(`[AutoScan] Data from ${lastScan.toISOString()} is past the next hour mark, triggering refresh...`);
+      runAutoScan().catch(() => {});
+    }
+  }
   res.json({ results: cachedResults, lastScanTime, scanInProgress });
 });
 
@@ -736,17 +754,17 @@ const FALLBACK_PSA10 = {
   "Alakazam":1620.64,"Blastoise":6263.98,"Chansey":3051,"Charizard":12221.02,"Clefairy":3268.50,
   "Gyarados":1790.37,"Hitmonchan":1248.80,"Machamp":null,"Magneton":861.22,"Mewtwo":2750.50,
   "Nidoking":1150.92,"Ninetales":927.70,"Poliwrath":947.29,"Raichu":2500,"Venusaur":3111.21,
-  "Zapdos":1229.72,"Beedrill":115,"Dragonair":200,"Dugtrio":170,"Electabuzz":155,
-  "Electrode":120,"Pidgeotto":215,"Arcanine":450,"Charmeleon":350,"Dewgong":100,
-  "Dratini":120,"Farfetch'd":100,"Growlithe":175,"Haunter":170,"Ivysaur":295,
-  "Jynx":100,"Kadabra":110,"Kakuna":100,"Machoke":100,"Magikarp":200,
-  "Magmar":100,"Nidorino":100,"Poliwhirl":100,"Porygon":150,"Raticate":100,
-  "Seel":100,"Wartortle":300,"Abra":100,"Bulbasaur":450,"Caterpie":150,
-  "Charmander":750,"Diglett":100,"Doduo":100,"Drowzee":100,"Gastly":120,
-  "Koffing":100,"Machop":100,"Magnemite":100,"Metapod":100,"Nidoran":100,
-  "Onix":120,"Pidgey":100,"Pikachu":800,"Poliwag":100,"Ponyta":120,
-  "Rattata":100,"Sandshrew":100,"Squirtle":500,"Starmie":120,"Staryu":100,
-  "Tangela":100,"Voltorb":100,"Vulpix":150,"Weedle":100,
+  "Zapdos":1229.72,"Beedrill":115,"Dragonair":267.34,"Dugtrio":130,"Electabuzz":193.50,
+  "Electrode":167.38,"Pidgeotto":188.18,"Arcanine":243.61,"Charmeleon":171.15,"Dewgong":152.84,
+  "Dratini":156.04,"Farfetch'd":115,"Growlithe":100,"Haunter":175,"Ivysaur":163.70,
+  "Jynx":141.94,"Kadabra":196.12,"Kakuna":92.50,"Machoke":105,"Magikarp":286.94,
+  "Magmar":150,"Nidorino":236.04,"Poliwhirl":168.32,"Porygon":185,"Raticate":171.23,
+  "Seel":98.75,"Wartortle":204.11,"Abra":115.45,"Bulbasaur":228.70,"Caterpie":81,
+  "Charmander":207.50,"Diglett":77.88,"Doduo":95,"Drowzee":100,"Gastly":143.07,
+  "Koffing":98,"Machop":89.46,"Magnemite":78.71,"Metapod":75,"Nidoran":83,
+  "Onix":104.21,"Pidgey":115,"Pikachu":421.72,"Poliwag":117.50,"Ponyta":99.99,
+  "Rattata":86.30,"Sandshrew":125,"Squirtle":307.47,"Starmie":80.96,"Staryu":75.04,
+  "Tangela":96,"Voltorb":161.24,"Vulpix":108.68,"Weedle":77,
 };
 
 function buildFallbackMarketPrices() {
@@ -777,10 +795,27 @@ async function fetchAllMarketPrices() {
       const $pc = cheerio.load(pcHtml2);
 
       let psa10Price = null;
-      const priceEl = $pc('#manual_only_price');
-      if (priceEl.length) {
-        const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
-        if (match) psa10Price = parseFloat(match[1].replace(/,/g, ''));
+      // Use average of last 5 comps from PSA 10 sold listings
+      const psa10Section = $pc('div.completed-auctions-manual-only');
+      if (psa10Section.length) {
+        const prices = [];
+        psa10Section.find('tbody tr').each((i, row) => {
+          if (prices.length >= 5) return false;
+          const priceText = $pc(row).find('td.numeric .js-price').first().text();
+          const match = priceText.match(/\$([\d,]+\.?\d*)/);
+          if (match) prices.push(parseFloat(match[1].replace(/,/g, '')));
+        });
+        if (prices.length > 0) {
+          psa10Price = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length * 100) / 100;
+        }
+      }
+      // Fallback to manual_only_price if no comps found
+      if (!psa10Price) {
+        const priceEl = $pc('#manual_only_price');
+        if (priceEl.length) {
+          const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+          if (match) psa10Price = parseFloat(match[1].replace(/,/g, ''));
+        }
       }
 
       let ungradedPrice = null;
@@ -825,6 +860,12 @@ async function fetchAllMarketPrices() {
   cachedMarketPrices = prices;
   marketPricesLastUpdate = new Date().toISOString();
   saveCache();
+  // Update in-memory fallback prices so future blocked requests use latest values
+  if (successCount > 0) {
+    for (const p of prices) {
+      if (p.psa10Price) FALLBACK_PSA10[p.name] = p.psa10Price;
+    }
+  }
   console.log(`[MarketPrices] Done. ${successCount} live prices, ${prices.length - successCount} fallback. Cached.`);
 }
 
@@ -835,41 +876,100 @@ const MAX_PER_CARD = 10;
 // PriceCharting lookup cache keyed by search term
 let auctionPriceCache = {};
 
-async function getAuctionCardPrice(title) {
-  // Build a search key from the eBay title: card name + set + card number
-  // e.g. "2019 POKEMON SUN & MOON UNIFIED MINDS #152 DRAGONITE GX PSA 10" -> "pokemon unified minds 152 dragonite gx"
-  let searchKey = title
-    .replace(/psa\s*10/i, '').replace(/gem\s*mint/i, '')
-    .replace(/\b\d{4}\b/g, '') // remove years
-    .replace(/\b(graded|slab|card|tcg|holo|rare|eng?|en\b)\b/gi, '')
-    .replace(/[^\w\s#\/&-]/g, ' ').replace(/\s+/g, ' ').trim();
+async function getAuctionCardPrice(title, pokemonName) {
+  // Extract card number from title (e.g. "#152" or "152/236")
+  const cardNumMatch = title.match(/#(\d+)/) || title.match(/\b(\d+)\/\d+\b/);
+  const cardNum = cardNumMatch ? cardNumMatch[1] : null;
 
-  if (auctionPriceCache[searchKey] !== undefined) return auctionPriceCache[searchKey];
+  const cacheKey = `${pokemonName}|${cardNum || 'none'}|${title.substring(0, 60)}`;
+  if (auctionPriceCache[cacheKey] !== undefined) return auctionPriceCache[cacheKey];
+
+  // Search PriceCharting like a human would: "pikachu 52"
+  const searchQuery = cardNum ? `${pokemonName} ${cardNum}` : pokemonName;
 
   try {
-    const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(searchKey)}&type=prices`;
+    const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(searchQuery)}&type=prices`;
     const html = await fetchPage(searchUrl);
     const $ = cheerio.load(html);
-    const firstResult = $('table#games_table a[href*="game/"]').first();
-    if (firstResult.length) {
-      const href = firstResult.attr('href');
-      const pcUrl = href.startsWith('http') ? href : 'https://www.pricecharting.com' + href;
-      const detailHtml = await fetchPage(pcUrl);
-      const $d = cheerio.load(detailHtml);
-      let marketPrice = null;
+
+    const nameLower = pokemonName.toLowerCase();
+    let matchedHref = null;
+
+    // Collect all unique result hrefs
+    const allHrefs = [];
+    $('table#games_table a[href*="game/"]').each((i, el) => {
+      const href = $(el).attr('href');
+      if (href && !allHrefs.includes(href)) allHrefs.push(href);
+    });
+
+    // Priority 1: URL contains pokemon name AND ends with card number
+    if (cardNum) {
+      matchedHref = allHrefs.find(h =>
+        h.toLowerCase().includes(nameLower) && h.match(new RegExp(`-${cardNum}$`))
+      );
+    }
+
+    // Priority 2: URL contains the pokemon name (first match)
+    if (!matchedHref) {
+      matchedHref = allHrefs.find(h => h.toLowerCase().includes(nameLower));
+    }
+
+    if (!matchedHref) {
+      console.log(`[AuctionPC] No match for "${searchQuery}" in search results`);
+      auctionPriceCache[cacheKey] = null;
+      return null;
+    }
+
+    const pcUrl = matchedHref.startsWith('http') ? matchedHref : 'https://www.pricecharting.com' + matchedHref;
+
+    // Validate: URL must contain the pokemon name
+    if (!pcUrl.toLowerCase().includes(nameLower)) {
+      console.log(`[AuctionPC] URL doesn't contain "${pokemonName}", skipping: ${pcUrl}`);
+      auctionPriceCache[cacheKey] = null;
+      return null;
+    }
+
+    const detailHtml = await fetchPage(pcUrl);
+    const $d = cheerio.load(detailHtml);
+
+    // Verify the page title contains the pokemon name
+    const pageTitle = $d('h1').first().text().toLowerCase();
+    if (!pageTitle.includes(nameLower)) {
+      console.log(`[AuctionPC] Page title "${pageTitle}" doesn't contain "${pokemonName}", skipping`);
+      auctionPriceCache[cacheKey] = null;
+      return null;
+    }
+
+    let marketPrice = null;
+    // Use average of last 5 comps from PSA 10 sold listings
+    const psa10Section = $d('div.completed-auctions-manual-only');
+    if (psa10Section.length) {
+      const prices = [];
+      psa10Section.find('tbody tr').each((i, row) => {
+        if (prices.length >= 5) return false;
+        const priceText = $d(row).find('td.numeric .js-price').first().text();
+        const match = priceText.match(/\$([\d,]+\.?\d*)/);
+        if (match) prices.push(parseFloat(match[1].replace(/,/g, '')));
+      });
+      if (prices.length > 0) {
+        marketPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length * 100) / 100;
+      }
+    }
+    // Fallback to manual_only_price if no comps found
+    if (!marketPrice) {
       const priceEl = $d('#manual_only_price');
       if (priceEl.length) {
         const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
         if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
       }
-      console.log(`[AuctionPC] "${searchKey.substring(0,50)}" -> $${marketPrice || 'N/A'} (${pcUrl})`);
-      auctionPriceCache[searchKey] = { marketPrice, pcUrl };
-      return auctionPriceCache[searchKey];
     }
+    console.log(`[AuctionPC] "${pokemonName}" #${cardNum || '?'} -> $${marketPrice || 'N/A'} (${pcUrl})`);
+    auctionPriceCache[cacheKey] = { marketPrice, pcUrl };
+    return auctionPriceCache[cacheKey];
   } catch (err) {
-    console.error(`[AuctionPC] Error: ${err.message}`);
+    console.error(`[AuctionPC] Error for "${pokemonName}" #${cardNum || '?'}: ${err.message}`);
   }
-  auctionPriceCache[searchKey] = null;
+  auctionPriceCache[cacheKey] = null;
   return null;
 }
 
@@ -961,7 +1061,7 @@ async function fetchEndingAuctions() {
   // Look up PriceCharting for each auction using its specific title
   for (const a of allAuctions) {
     try {
-      const pc = await getAuctionCardPrice(a.title);
+      const pc = await getAuctionCardPrice(a.title, a.name.toLowerCase());
       if (pc && pc.marketPrice) {
         a.marketPrice = pc.marketPrice;
         a.pricechartingUrl = pc.pcUrl;
@@ -989,9 +1089,10 @@ async function fetchEndingAuctions() {
 
 app.get("/api/ending-auctions", async (req, res) => {
   try {
-    // If refresh requested or no cache, fetch fresh
-    const forceRefresh = req.query.refresh === "1";
-    if (forceRefresh || !cachedEndingAuctions) {
+    // Fetch fresh if no cache or data is older than 5 minutes
+    const stale = !cachedEndingAuctions || !endingAuctionsLastUpdate ||
+      (Date.now() - new Date(endingAuctionsLastUpdate).getTime()) > 5 * 60 * 1000;
+    if (stale) {
       await fetchEndingAuctions();
     }
     // Recalculate minutesLeft from cached data (times shift as time passes)
@@ -1023,16 +1124,12 @@ const PORT = process.env.PORT || 3456;
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // On deploy: use fallback prices immediately if no cache, then try live fetch
+  // On deploy: always start with hardcoded fallback prices, then try live fetch
   setTimeout(async () => {
-    if (!cachedMarketPrices || cachedMarketPrices.length === 0) {
-      console.log("[Startup] No cached market prices, loading fallback...");
-      cachedMarketPrices = buildFallbackMarketPrices();
-      marketPricesLastUpdate = "2026-03-18T00:00:00Z (fallback)";
-      saveCache();
-    } else {
-      console.log("[Startup] Using cached market prices from", marketPricesLastUpdate);
-    }
+    console.log("[Startup] Loading fallback market prices...");
+    cachedMarketPrices = buildFallbackMarketPrices();
+    marketPricesLastUpdate = "2026-03-19T00:00:00Z (fallback)";
+    saveCache();
     // Run deals scan with whatever prices we have
     await runAutoScan();
     // Try fetching live prices in background (will use fallback if blocked)
