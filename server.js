@@ -708,43 +708,17 @@ async function runAutoScan() {
       saveCache();
     }
 
-    // Cache results immediately WITHOUT prices so Deals tab shows data right away
-    buildAndCacheResults({});
-    console.log(`[AutoScan] Cached ${allListings.length} listings (no prices yet). Looking up PriceCharting...`);
-
-    // Now try PriceCharting lookups — update cache as we go
+    // Use cached market prices from the daily PriceCharting fetch
     const priceCache = {};
-    const uniqueCards = [...new Set(allListings.map(l => l.cardName))];
-    let pcSuccess = 0;
-
-    for (const cardName of uniqueCards) {
-      try {
-        const cardInfo = BASE_SET_CARDS.find(c => c.name === cardName);
-        const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-        const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
-
-        const pcHtml = await fetchPage(directUrl);
-        const $pc = cheerio.load(pcHtml);
-        let marketPrice = null;
-        const priceEl = $pc('#manual_only_price');
-        if (priceEl.length) {
-          const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
-          if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
-        }
-        priceCache[cardName] = { marketPrice, pricechartingUrl: directUrl };
-        if (marketPrice) pcSuccess++;
-        console.log(`[AutoScan] PC: ${cardName} = ${marketPrice ? '$' + marketPrice : 'N/A'}`);
-      } catch (err) {
-        priceCache[cardName] = { marketPrice: null, pricechartingUrl: null };
-        console.log(`[AutoScan] PC: ${cardName} failed: ${err.message}`);
+    if (cachedMarketPrices) {
+      for (const mp of cachedMarketPrices) {
+        priceCache[mp.name] = { marketPrice: mp.psa10Price, pricechartingUrl: mp.pricechartingUrl };
       }
-      await delay(1500, 3000);
     }
 
-    // Re-cache with prices
     buildAndCacheResults(priceCache);
-    console.log(`[AutoScan] Updated with prices. ${pcSuccess}/${uniqueCards.length} cards priced.`);
-    console.log(`[AutoScan] Done! ${buyItNow.length} BIN, ${auctions.length} auctions. Cached at ${lastScanTime}`);
+    const r = cachedResults;
+    console.log(`[AutoScan] Done! ${r.buyItNow.length} BIN, ${r.auctions.length} auctions. Cached at ${lastScanTime}`);
   } catch (e) {
     console.error("[AutoScan] Error:", e);
   } finally {
@@ -949,25 +923,49 @@ const PORT = process.env.PORT || 3456;
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // Run deals scan immediately (fast via API), then market prices in background
+  // On deploy: run deals scan immediately, market prices only if not cached
   setTimeout(async () => {
     await runAutoScan();
-    await fetchAllMarketPrices();
+    if (!cachedMarketPrices || cachedMarketPrices.length === 0) {
+      console.log("[Scheduler] No cached market prices, fetching now...");
+      await fetchAllMarketPrices();
+      // Re-run scan to apply new prices
+      await runAutoScan();
+    }
   }, 3000);
 
-  // Schedule on clock hours (1:00, 2:00, etc.)
+  // Deals scan: every clock hour
   function scheduleNextHour() {
     const now = new Date();
     const next = new Date(now);
-    next.setHours(next.getHours() + 1, 0, 0, 0); // next :00
+    next.setHours(next.getHours() + 1, 0, 0, 0);
     const msUntil = next - now;
-    console.log(`[Scheduler] Next scan at ${next.toISOString()} (in ${Math.round(msUntil/60000)}m)`);
+    console.log(`[Scheduler] Next deals scan at ${next.toISOString()} (in ${Math.round(msUntil/60000)}m)`);
     setTimeout(async () => {
       await runAutoScan();
-      await fetchAllMarketPrices();
       scheduleNextHour();
     }, msUntil);
   }
   scheduleNextHour();
+
+  // Market prices: once a day at midnight Pacific
+  function scheduleNextMidnight() {
+    const now = new Date();
+    // Next midnight Pacific = next day 07:00 UTC (or 08:00 UTC during DST)
+    const pacific = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+    const tomorrow = new Date(pacific);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    // Convert back to UTC offset
+    const midnightPT = new Date(now.getTime() + (tomorrow - pacific));
+    const msUntil = midnightPT - now;
+    console.log(`[Scheduler] Next market prices at midnight PT (in ${Math.round(msUntil/3600000)}h)`);
+    setTimeout(async () => {
+      await fetchAllMarketPrices();
+      await runAutoScan(); // re-run deals to pick up new prices
+      scheduleNextMidnight();
+    }, msUntil);
+  }
+  scheduleNextMidnight();
 })();
 process.stdin.resume();
