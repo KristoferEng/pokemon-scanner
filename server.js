@@ -573,10 +573,23 @@ app.get("/api/scan-card", async (req, res) => {
   }
 });
 
-// ===== AUTO-SCAN: runs every hour, caches results =====
+// ===== CACHED DATA =====
 let cachedResults = null;
 let lastScanTime = null;
 let scanInProgress = false;
+let cachedMarketPrices = null;
+let marketPricesLastUpdate = null;
+
+// Register all API routes up front
+app.get("/api/cached-results", (req, res) => {
+  res.json({ results: cachedResults, lastScanTime, scanInProgress });
+});
+
+app.get("/api/market-prices", (req, res) => {
+  res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate });
+});
+
+// ===== AUTO-SCAN =====
 
 async function runAutoScan() {
   if (scanInProgress) return;
@@ -714,19 +727,7 @@ async function runAutoScan() {
   }
 }
 
-// Serve cached results
-app.get("/api/cached-results", (req, res) => {
-  res.json({
-    results: cachedResults,
-    lastScanTime,
-    scanInProgress,
-  });
-});
-
 // ===== MARKET PRICES: all 102 base set cards =====
-let cachedMarketPrices = null;
-let marketPricesLastUpdate = null;
-
 async function fetchAllMarketPrices() {
   console.log("[MarketPrices] Fetching all 102 base set card prices...");
   const prices = [];
@@ -787,13 +788,6 @@ async function fetchAllMarketPrices() {
   console.log(`[MarketPrices] Done. Cached ${prices.length} cards.`);
 }
 
-app.get("/api/market-prices", (req, res) => {
-  res.json({
-    prices: cachedMarketPrices,
-    lastUpdate: marketPricesLastUpdate,
-  });
-});
-
 // ===== ENDING AUCTIONS: any PSA 10 Pokemon auction ending within 60 min =====
 app.get("/api/ending-auctions", async (req, res) => {
   try {
@@ -834,10 +828,16 @@ app.get("/api/ending-auctions", async (req, res) => {
           // Exclude other graders
           if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) continue;
           // Exclude Japanese, Chinese, Korean, Spanish, French, German, etc.
-          if (/\b(jpn|jap|japanese|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified|chi|kor|svk)\b/i.test(tl)) continue;
+          if (/\b(jpn|jap|japanese|japanse|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified|chi|kor|svk)\b/i.test(tl)) continue;
           if (/\bjp\b/i.test(tl)) continue;
           // Exclude non-slab / non-card items
           if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|collection|raw|ungraded)\b/i.test(tl)) continue;
+          // Exclude Base Set 2, Celebrations, XY Evolutions (reprints)
+          if (/base\s*(set\s*)?2|base\s*ii\b/i.test(tl)) continue;
+          if (/\bcelebrations\b/i.test(tl)) continue;
+          if (/\bxy\s*evolutions\b|evolutions\s*(holo|#|\d)/i.test(tl)) continue;
+          // Exclude "XY Evolutions" but keep "Prismatic Evolutions", "Mega Evolutions" (real sets)
+          if (/\b(2016|2017)\b.*\bevolutions\b/i.test(tl)) continue;
 
           const price = extractPrice(item);
           if (price === null || price < 25 || price > 5000) continue;
