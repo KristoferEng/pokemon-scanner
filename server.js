@@ -2,9 +2,15 @@ const express = require("express");
 const path = require("path");
 const cheerio = require("cheerio");
 
-// got-scraping is ESM-only, use dynamic import (only needed for PriceCharting)
-let gotScraping;
-const gotReady = import("got-scraping").then(m => { gotScraping = m.gotScraping; });
+const PC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+
+async function fetchPage(url) {
+  const resp = await fetch(url, {
+    headers: { 'User-Agent': PC_UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+    signal: AbortSignal.timeout(15000),
+  });
+  return resp.text();
+}
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
 process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
@@ -286,14 +292,8 @@ app.get("/api/scan", async (req, res) => {
         const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
 
-        const pcResp = await gotScraping({
-          url: directUrl,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
-          responseType: 'text',
-          timeout: { request: 15000 },
-          retry: { limit: 1 },
-        });
-        const $pc = cheerio.load(pcResp.body);
+        const pcHtml = await fetchPage(directUrl);
+        const $pc = cheerio.load(pcHtml);
 
         let marketPrice = null;
         const priceEl = $pc('#manual_only_price');
@@ -472,26 +472,14 @@ app.get("/api/scan-card", async (req, res) => {
       if (pcCache[searchTerm] !== undefined) return pcCache[searchTerm];
       try {
         const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(searchTerm)}&type=prices`;
-        const pcResp = await gotScraping({
-          url: searchUrl,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
-          responseType: 'text',
-          timeout: { request: 15000 },
-          retry: { limit: 1 },
-        });
-        const $pc = cheerio.load(pcResp.body);
+        const pcHtml = await fetchPage(searchUrl);
+        const $pc = cheerio.load(pcHtml);
         const firstResult = $pc('table#games_table a[href*="game/"]').first();
         if (firstResult.length) {
           const href = firstResult.attr('href');
           const pcUrl = href.startsWith('http') ? href : 'https://www.pricecharting.com' + href;
-          const detailResp = await gotScraping({
-            url: pcUrl,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
-            responseType: 'text',
-            timeout: { request: 15000 },
-            retry: { limit: 1 },
-          });
-          const $d = cheerio.load(detailResp.body);
+          const detailHtml = await fetchPage(pcUrl);
+          const $d = cheerio.load(detailHtml);
           const priceEl = $d('#manual_only_price');
           let mp = null;
           if (priceEl.length) {
@@ -655,14 +643,8 @@ async function runAutoScan() {
         const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
 
-        const pcResp = await gotScraping({
-          url: directUrl,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
-          responseType: 'text',
-          timeout: { request: 15000 },
-          retry: { limit: 1 },
-        });
-        const $pc = cheerio.load(pcResp.body);
+        const pcHtml = await fetchPage(directUrl);
+        const $pc = cheerio.load(pcHtml);
         let marketPrice = null;
         const priceEl = $pc('#manual_only_price');
         if (priceEl.length) {
@@ -737,14 +719,8 @@ async function fetchAllMarketPrices() {
     const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${card.number}`;
 
     try {
-      const pcResp = await gotScraping({
-        url: directUrl,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
-        responseType: 'text',
-        timeout: { request: 15000 },
-        retry: { limit: 1 },
-      });
-      const $pc = cheerio.load(pcResp.body);
+      const pcHtml2 = await fetchPage(directUrl);
+      const $pc = cheerio.load(pcHtml2);
 
       let psa10Price = null;
       const priceEl = $pc('#manual_only_price');
@@ -904,7 +880,7 @@ app.get("/api/ending-auctions", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3456;
-gotReady.then(() => {
+(async () => {
   const server = app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
   });
@@ -931,5 +907,5 @@ gotReady.then(() => {
     }, msUntil);
   }
   scheduleNextHour();
-});
+})();
 process.stdin.resume();

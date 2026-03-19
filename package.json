@@ -13,7 +13,6 @@
   "type": "commonjs",
   "dependencies": {
     "cheerio": "^1.2.0",
-    "express": "^5.2.1",
-    "got-scraping": "^4.0.8"
+    "express": "^5.2.1"
   }
 }
