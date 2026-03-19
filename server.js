@@ -801,7 +801,7 @@ app.get("/api/ending-auctions", async (req, res) => {
     const seenIds = new Set();
 
     // Broad search: any PSA 10 Pokemon card auction
-    const query = '"psa 10" pokemon -bgs -cgc -sgc -pack -booster -lot -bundle -raw -ungraded';
+    const query = '"psa 10" pokemon -bgs -cgc -sgc -pack -booster -lot -bundle -raw -ungraded -japanese -japan -jpn -korean -chinese -spanish -french -german';
     const filters = "price:[25..5000],priceCurrency:USD,buyingOptions:{AUCTION}";
     const pageSize = 200;
     const maxPages = 5;
@@ -828,10 +828,16 @@ app.get("/api/ending-auctions", async (req, res) => {
           if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
 
           const title = item.title || "";
+          const tl = title.toLowerCase();
           // Must actually say "PSA 10" in the title
           if (!/psa\s*10/i.test(title)) continue;
           // Exclude other graders
           if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) continue;
+          // Exclude Japanese, Chinese, Korean, Spanish, French, German, etc.
+          if (/\b(jpn|jap|japanese|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified|chi|kor|svk)\b/i.test(tl)) continue;
+          if (/\bjp\b/i.test(tl)) continue;
+          // Exclude non-slab / non-card items
+          if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|collection|raw|ungraded)\b/i.test(tl)) continue;
 
           const price = extractPrice(item);
           if (price === null || price < 25 || price > 5000) continue;
