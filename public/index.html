@@ -63,19 +63,19 @@
     .time-urgent { color: #f87171; font-weight: 700; }
     .time-warn { color: #fbbf24; font-weight: 600; }
 
-    /* Mobile styles - keep table layout, just smaller */
+    /* Mobile styles - horizontally scrollable tables */
     @media (max-width: 768px) {
       .container { padding: 6px; }
       h1 { font-size: 1.3rem; margin: 10px 0 4px; }
       .subtitle { font-size: 0.7rem; }
       #goBtn { padding: 8px 24px; font-size: 0.85rem; }
       h2 { font-size: 1rem; margin: 12px 0 6px; }
-      table { font-size: 0.7rem; }
-      th { padding: 6px 4px; font-size: 0.65rem; }
-      td { padding: 5px 4px; font-size: 0.7rem; }
-      .badge { font-size: 0px; padding: 0; margin: 0; display: none; }
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      table { font-size: 0.7rem; min-width: 600px; }
+      th { padding: 6px 4px; font-size: 0.65rem; white-space: nowrap; }
+      td { padding: 5px 4px; font-size: 0.7rem; white-space: nowrap; }
+      .badge { display: none; }
       .count-badge { font-size: 0.7rem; padding: 2px 8px; }
-      td:nth-child(6) { max-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     }
   </style>
 </head>
@@ -97,31 +97,31 @@
 
       <div id="dealsResults">
         <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
-        <table id="binTable">
+        <div class="table-wrap"><table id="binTable">
           <thead>
             <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
           </thead>
           <tbody></tbody>
-        </table>
+        </table></div>
         <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
-        <table id="auctionTable">
+        <div class="table-wrap"><table id="auctionTable">
           <thead>
             <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
           </thead>
           <tbody></tbody>
-        </table>
+        </table></div>
       </div>
     </div>
 
     <!-- TAB 2: Market Prices -->
     <div class="tab-content" id="tab-market">
       <p class="subtitle" id="marketLastUpdate"></p>
-      <table id="marketTable">
+      <div class="table-wrap"><table id="marketTable">
         <thead>
           <tr><th>#</th><th>Card</th><th>Type</th><th>PSA 10 Price</th><th>Ungraded Price</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
-      </table>
+      </table></div>
     </div>
   </div>
 
