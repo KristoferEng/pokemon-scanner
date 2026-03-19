@@ -5,11 +5,17 @@ const cheerio = require("cheerio");
 const PC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 async function fetchPage(url) {
-  const resp = await fetch(url, {
-    headers: { 'User-Agent': PC_UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-    signal: AbortSignal.timeout(15000),
-  });
-  return resp.text();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': PC_UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+      signal: controller.signal,
+    });
+    return await resp.text();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 process.on("uncaughtException", (err) => console.error("Uncaught:", err));
@@ -631,11 +637,58 @@ async function runAutoScan() {
       }
     }
 
-    console.log(`[AutoScan] Found ${allListings.length} listings, looking up prices...`);
+    console.log(`[AutoScan] Found ${allListings.length} listings.`);
 
-    // PriceCharting lookup
+    function countryOrder(loc) {
+      const l = (loc || '').toLowerCase();
+      if (l.includes('united states')) return 0;
+      if (l.includes('canada')) return 1;
+      if (l.includes('united kingdom')) return 2;
+      return 3;
+    }
+
+    function buildAndCacheResults(priceCache) {
+      const buyItNow = [];
+      const auctions = [];
+      for (const listing of allListings) {
+        const pc = priceCache[listing.cardName] || {};
+        const marketPrice = pc.marketPrice || null;
+        const difference = marketPrice != null ? listing.price - marketPrice : null;
+        const pctOverMarket = marketPrice != null && marketPrice > 0
+          ? ((listing.price - marketPrice) / marketPrice) * 100 : null;
+        const item = {
+          name: listing.cardName, title: listing.title, price: listing.price,
+          marketPrice, difference, pctOverMarket, ebayUrl: listing.link,
+          pricechartingUrl: pc.pricechartingUrl || null, verified: !!marketPrice, location: listing.location,
+        };
+        if (listing.isAuction) auctions.push(item); else buyItNow.push(item);
+      }
+      buyItNow.sort((a, b) => {
+        const ca = countryOrder(a.location), cb = countryOrder(b.location);
+        if (ca !== cb) return ca - cb;
+        if (a.pctOverMarket == null) return 1;
+        if (b.pctOverMarket == null) return -1;
+        return a.pctOverMarket - b.pctOverMarket;
+      });
+      auctions.sort((a, b) => {
+        const ca = countryOrder(a.location), cb = countryOrder(b.location);
+        if (ca !== cb) return ca - cb;
+        if (a.pctOverMarket == null) return 1;
+        if (b.pctOverMarket == null) return -1;
+        return a.pctOverMarket - b.pctOverMarket;
+      });
+      cachedResults = { buyItNow, auctions };
+      lastScanTime = new Date().toISOString();
+    }
+
+    // Cache results immediately WITHOUT prices so Deals tab shows data right away
+    buildAndCacheResults({});
+    console.log(`[AutoScan] Cached ${allListings.length} listings (no prices yet). Looking up PriceCharting...`);
+
+    // Now try PriceCharting lookups — update cache as we go
     const priceCache = {};
     const uniqueCards = [...new Set(allListings.map(l => l.cardName))];
+    let pcSuccess = 0;
 
     for (const cardName of uniqueCards) {
       try {
@@ -652,55 +705,18 @@ async function runAutoScan() {
           if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
         }
         priceCache[cardName] = { marketPrice, pricechartingUrl: directUrl };
-      } catch {
+        if (marketPrice) pcSuccess++;
+        console.log(`[AutoScan] PC: ${cardName} = ${marketPrice ? '$' + marketPrice : 'N/A'}`);
+      } catch (err) {
         priceCache[cardName] = { marketPrice: null, pricechartingUrl: null };
+        console.log(`[AutoScan] PC: ${cardName} failed: ${err.message}`);
       }
       await delay(1500, 3000);
     }
 
-    // Build results
-    const buyItNow = [];
-    const auctions = [];
-
-    for (const listing of allListings) {
-      const pc = priceCache[listing.cardName] || {};
-      const marketPrice = pc.marketPrice;
-      const difference = marketPrice != null ? listing.price - marketPrice : null;
-      const pctOverMarket = marketPrice != null && marketPrice > 0
-        ? ((listing.price - marketPrice) / marketPrice) * 100 : null;
-
-      const item = {
-        name: listing.cardName, title: listing.title, price: listing.price,
-        marketPrice, difference, pctOverMarket, ebayUrl: listing.link,
-        pricechartingUrl: pc.pricechartingUrl, verified: true, location: listing.location,
-      };
-      if (listing.isAuction) auctions.push(item); else buyItNow.push(item);
-    }
-
-    function countryOrder(loc) {
-      const l = (loc || '').toLowerCase();
-      if (l.includes('united states')) return 0;
-      if (l.includes('canada')) return 1;
-      if (l.includes('united kingdom')) return 2;
-      return 3;
-    }
-    buyItNow.sort((a, b) => {
-      const ca = countryOrder(a.location), cb = countryOrder(b.location);
-      if (ca !== cb) return ca - cb;
-      if (a.pctOverMarket == null) return 1;
-      if (b.pctOverMarket == null) return -1;
-      return a.pctOverMarket - b.pctOverMarket;
-    });
-    auctions.sort((a, b) => {
-      const ca = countryOrder(a.location), cb = countryOrder(b.location);
-      if (ca !== cb) return ca - cb;
-      if (a.pctOverMarket == null) return 1;
-      if (b.pctOverMarket == null) return -1;
-      return a.pctOverMarket - b.pctOverMarket;
-    });
-
-    cachedResults = { buyItNow, auctions };
-    lastScanTime = new Date().toISOString();
+    // Re-cache with prices
+    buildAndCacheResults(priceCache);
+    console.log(`[AutoScan] Updated with prices. ${pcSuccess}/${uniqueCards.length} cards priced.`);
     console.log(`[AutoScan] Done! ${buyItNow.length} BIN, ${auctions.length} auctions. Cached at ${lastScanTime}`);
   } catch (e) {
     console.error("[AutoScan] Error:", e);
