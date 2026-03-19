@@ -783,47 +783,41 @@ async function fetchAllMarketPrices() {
 }
 
 // ===== ENDING AUCTIONS: PSA 10 auctions for specific cards =====
-const POKEWALLET_API_KEY = process.env.POKEWALLET_API_KEY || "";
 const AUCTION_CARDS = ["dragonite", "pikachu", "vulpix", "wigglytuff"];
 const MAX_PER_CARD = 10;
 
-// PokéWallet market price cache (persists in memory, refreshed hourly with everything else)
-let pokewalletCache = {};
+// PriceCharting PSA 10 price cache for auction cards
+let auctionPriceCache = {};
 
-async function getPokewalletPrice(cardName) {
-  if (pokewalletCache[cardName] !== undefined) return pokewalletCache[cardName];
-  if (!POKEWALLET_API_KEY) { pokewalletCache[cardName] = null; return null; }
+async function getAuctionCardPrice(cardName) {
+  if (auctionPriceCache[cardName] !== undefined) return auctionPriceCache[cardName];
 
+  // Search PriceCharting for PSA 10 price
   try {
-    const resp = await fetch(`https://api.pokewallet.io/search?q=${encodeURIComponent(cardName)}&limit=5`, {
-      headers: { "X-API-Key": POKEWALLET_API_KEY },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) { pokewalletCache[cardName] = null; return null; }
-    const data = await resp.json();
-    // Find a matching card and get market price from TCGPlayer data
-    const cards = data.data || data.cards || data || [];
-    let marketPrice = null;
-    let cardUrl = null;
-    for (const card of (Array.isArray(cards) ? cards : [])) {
-      // Look for a holofoil or normal market price
-      const prices = card.tcgplayer_prices || card.prices || [];
-      for (const p of (Array.isArray(prices) ? prices : [])) {
-        if (p.market_price && p.market_price > 0) {
-          marketPrice = p.market_price;
-          break;
-        }
+    const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent('pokemon ' + cardName + ' psa 10')}&type=prices`;
+    const html = await fetchPage(searchUrl);
+    const $ = cheerio.load(html);
+    const firstResult = $('table#games_table a[href*="game/"]').first();
+    if (firstResult.length) {
+      const href = firstResult.attr('href');
+      const pcUrl = href.startsWith('http') ? href : 'https://www.pricecharting.com' + href;
+      const detailHtml = await fetchPage(pcUrl);
+      const $d = cheerio.load(detailHtml);
+      let marketPrice = null;
+      const priceEl = $d('#manual_only_price');
+      if (priceEl.length) {
+        const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+        if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
       }
-      if (card.url || card.tcgplayer_url) cardUrl = card.url || card.tcgplayer_url;
-      if (marketPrice) break;
+      console.log(`[AuctionPC] ${cardName}: PSA 10 = $${marketPrice || 'N/A'} (${pcUrl})`);
+      auctionPriceCache[cardName] = { marketPrice, pcUrl };
+      return auctionPriceCache[cardName];
     }
-    pokewalletCache[cardName] = { marketPrice, cardUrl };
-    return pokewalletCache[cardName];
   } catch (err) {
-    console.error(`[PokéWallet] Error for ${cardName}:`, err.message);
-    pokewalletCache[cardName] = null;
-    return null;
+    console.error(`[AuctionPC] Error for ${cardName}:`, err.message);
   }
+  auctionPriceCache[cardName] = null;
+  return null;
 }
 
 let cachedEndingAuctions = null;
@@ -906,19 +900,17 @@ async function fetchEndingAuctions() {
     }
   }
 
-  // PokéWallet market prices
-  if (POKEWALLET_API_KEY) {
-    for (const cardName of AUCTION_CARDS) {
-      const pw = await getPokewalletPrice(cardName + " psa 10 pokemon");
-      if (!pw || !pw.marketPrice) continue;
-      for (const a of allAuctions) {
-        if (a.name.toLowerCase() === cardName) {
-          a.marketPrice = pw.marketPrice;
-          a.pricechartingUrl = pw.cardUrl;
-          a.verified = true;
-          a.difference = a.price - pw.marketPrice;
-          a.pctOverMarket = pw.marketPrice > 0 ? ((a.price - pw.marketPrice) / pw.marketPrice) * 100 : null;
-        }
+  // PriceCharting PSA 10 market prices for each card
+  for (const cardName of AUCTION_CARDS) {
+    const pc = await getAuctionCardPrice(cardName);
+    if (!pc || !pc.marketPrice) continue;
+    for (const a of allAuctions) {
+      if (a.name.toLowerCase() === cardName) {
+        a.marketPrice = pc.marketPrice;
+        a.pricechartingUrl = pc.pcUrl;
+        a.verified = true;
+        a.difference = a.price - pc.marketPrice;
+        a.pctOverMarket = pc.marketPrice > 0 ? ((a.price - pc.marketPrice) / pc.marketPrice) * 100 : null;
       }
     }
   }
