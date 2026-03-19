@@ -53,9 +53,10 @@
 <body>
   <div class="container">
     <h1>PSA 10 Base Set Pokemon Scanner</h1>
-    <p class="subtitle">Scans eBay for PSA 10 Base Set Unlimited Pokemon cards &amp; compares to PriceCharting market prices (stops at 1000)</p>
+    <p class="subtitle">Scans eBay for PSA 10 Base Set Unlimited Pokemon cards &amp; compares to PriceCharting market prices</p>
+    <p class="subtitle" id="lastScanInfo" style="color:#fbbf24;"></p>
 
-    <button id="goBtn" onclick="startScan()">Go</button>
+    <button id="goBtn" onclick="startScan()">Go (Live Scan)</button>
 
     <div class="stats" id="stats" style="display:none;">
       <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
@@ -161,6 +162,31 @@
         es.close();
       };
     }
+
+    // Load cached results on page load
+    async function loadCached() {
+      try {
+        const resp = await fetch('/api/cached-results');
+        const data = await resp.json();
+        if (data.lastScanTime) {
+          const t = new Date(data.lastScanTime);
+          document.getElementById('lastScanInfo').textContent =
+            'Last auto-scan: ' + t.toLocaleString() + (data.scanInProgress ? ' (scan in progress...)' : ' — auto-refreshes hourly');
+        }
+        if (data.results) {
+          document.getElementById('results').style.display = 'block';
+          document.getElementById('binCount').textContent = data.results.buyItNow.length;
+          document.getElementById('auctionCount').textContent = data.results.auctions.length;
+          renderTable('#binTable tbody', data.results.buyItNow);
+          renderTable('#auctionTable tbody', data.results.auctions);
+        } else if (data.scanInProgress) {
+          document.getElementById('lastScanInfo').textContent = 'First scan in progress... refresh in a minute.';
+        }
+      } catch {}
+    }
+    loadCached();
+    // Refresh cached results every 5 minutes
+    setInterval(loadCached, 5 * 60 * 1000);
 
     function renderTable(selector, items, showTime) {
       const tbody = document.querySelector(selector);

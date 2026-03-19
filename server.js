@@ -186,6 +186,11 @@ function countryFromLocation(loc) {
   return loc || "";
 }
 
+// Blocked item IDs (persist bad listings here)
+const BLOCKED_ITEMS = new Set([
+  "157236327643", // Haunter misidentified listing
+]);
+
 // SSE endpoint — Base Set scan
 app.get("/api/scan", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
@@ -230,6 +235,9 @@ app.get("/api/scan", async (req, res) => {
         for (const item of items) {
           const itemId = item.itemId;
           if (!itemId || seenIds.has(itemId)) continue;
+          // eBay API itemId format is like "v1|123456|0", extract the numeric part
+          const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
+          if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
 
           const title = item.title || "";
           const cardName = identifyCard(title);
@@ -240,7 +248,7 @@ app.get("/api/scan", async (req, res) => {
 
           const isAuction = (item.buyingOptions || []).includes("AUCTION");
           const location = countryFromLocation(extractLocation(item));
-          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${itemId}`;
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
 
           seenIds.add(itemId);
           allListings.push({ title, cardName, price, link: ebayUrl, isAuction, itemId, location });
@@ -424,6 +432,8 @@ app.get("/api/scan-card", async (req, res) => {
         for (const item of items) {
           const itemId = item.itemId;
           if (!itemId || seenIds.has(itemId)) continue;
+          const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
+          if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
 
           const title = item.title || "";
           const t = title.toLowerCase();
@@ -563,6 +573,156 @@ app.get("/api/scan-card", async (req, res) => {
   }
 });
 
+// ===== AUTO-SCAN: runs every hour, caches results =====
+let cachedResults = null;
+let lastScanTime = null;
+let scanInProgress = false;
+
+async function runAutoScan() {
+  if (scanInProgress) return;
+  scanInProgress = true;
+  console.log(`[AutoScan] Starting at ${new Date().toISOString()}`);
+
+  try {
+    const allListings = [];
+    const seenIds = new Set();
+
+    const query = "psa 10 unlimited base set pokemon -shadowless -1st -bgs -cgc -pack -booster";
+    const category = "183454";
+    const filters = "price:[25..25000],priceCurrency:USD";
+    const pageSize = 200;
+    const maxPages = 5;
+
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * pageSize;
+      try {
+        const result = await ebaySearch(query, category, pageSize, offset, filters, "newlyListed");
+        const items = result.itemSummaries || [];
+        const total = result.total || 0;
+        console.log(`[AutoScan] Page ${page + 1}: ${items.length} items (${total} total)`);
+        if (items.length === 0) break;
+
+        for (const item of items) {
+          const itemId = item.itemId;
+          if (!itemId || seenIds.has(itemId)) continue;
+          const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
+          if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
+
+          const title = item.title || "";
+          const cardName = identifyCard(title);
+          if (!cardName) continue;
+
+          const price = extractPrice(item);
+          if (price === null || price <= 25 || price >= 25000) continue;
+
+          const isAuction = (item.buyingOptions || []).includes("AUCTION");
+          const location = countryFromLocation(extractLocation(item));
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
+
+          seenIds.add(itemId);
+          allListings.push({ title, cardName, price, link: ebayUrl, isAuction, itemId, location });
+        }
+
+        if (offset + items.length >= total) break;
+      } catch (err) {
+        console.error(`[AutoScan] API error page ${page + 1}:`, err.message);
+        break;
+      }
+    }
+
+    console.log(`[AutoScan] Found ${allListings.length} listings, looking up prices...`);
+
+    // PriceCharting lookup
+    const priceCache = {};
+    const uniqueCards = [...new Set(allListings.map(l => l.cardName))];
+
+    for (const cardName of uniqueCards) {
+      try {
+        const cardInfo = BASE_SET_CARDS.find(c => c.name === cardName);
+        const slug = cardName.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${cardInfo ? cardInfo.number : ''}`;
+
+        const pcResp = await gotScraping({
+          url: directUrl,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
+          responseType: 'text',
+          timeout: { request: 15000 },
+          retry: { limit: 1 },
+        });
+        const $pc = cheerio.load(pcResp.body);
+        let marketPrice = null;
+        const priceEl = $pc('#manual_only_price');
+        if (priceEl.length) {
+          const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+          if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
+        }
+        priceCache[cardName] = { marketPrice, pricechartingUrl: directUrl };
+      } catch {
+        priceCache[cardName] = { marketPrice: null, pricechartingUrl: null };
+      }
+      await delay(1500, 3000);
+    }
+
+    // Build results
+    const buyItNow = [];
+    const auctions = [];
+
+    for (const listing of allListings) {
+      const pc = priceCache[listing.cardName] || {};
+      const marketPrice = pc.marketPrice;
+      const difference = marketPrice != null ? listing.price - marketPrice : null;
+      const pctOverMarket = marketPrice != null && marketPrice > 0
+        ? ((listing.price - marketPrice) / marketPrice) * 100 : null;
+
+      const item = {
+        name: listing.cardName, title: listing.title, price: listing.price,
+        marketPrice, difference, pctOverMarket, ebayUrl: listing.link,
+        pricechartingUrl: pc.pricechartingUrl, verified: true, location: listing.location,
+      };
+      if (listing.isAuction) auctions.push(item); else buyItNow.push(item);
+    }
+
+    function countryOrder(loc) {
+      const l = (loc || '').toLowerCase();
+      if (l.includes('united states')) return 0;
+      if (l.includes('canada')) return 1;
+      if (l.includes('united kingdom')) return 2;
+      return 3;
+    }
+    buyItNow.sort((a, b) => {
+      const ca = countryOrder(a.location), cb = countryOrder(b.location);
+      if (ca !== cb) return ca - cb;
+      if (a.pctOverMarket == null) return 1;
+      if (b.pctOverMarket == null) return -1;
+      return a.pctOverMarket - b.pctOverMarket;
+    });
+    auctions.sort((a, b) => {
+      const ca = countryOrder(a.location), cb = countryOrder(b.location);
+      if (ca !== cb) return ca - cb;
+      if (a.pctOverMarket == null) return 1;
+      if (b.pctOverMarket == null) return -1;
+      return a.pctOverMarket - b.pctOverMarket;
+    });
+
+    cachedResults = { buyItNow, auctions };
+    lastScanTime = new Date().toISOString();
+    console.log(`[AutoScan] Done! ${buyItNow.length} BIN, ${auctions.length} auctions. Cached at ${lastScanTime}`);
+  } catch (e) {
+    console.error("[AutoScan] Error:", e);
+  } finally {
+    scanInProgress = false;
+  }
+}
+
+// Serve cached results
+app.get("/api/cached-results", (req, res) => {
+  res.json({
+    results: cachedResults,
+    lastScanTime,
+    scanInProgress,
+  });
+});
+
 const PORT = process.env.PORT || 3456;
 gotReady.then(() => {
   const server = app.listen(PORT, () => {
@@ -570,5 +730,9 @@ gotReady.then(() => {
   });
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
+
+  // Run first scan after 5 seconds, then every hour
+  setTimeout(() => runAutoScan(), 5000);
+  setInterval(() => runAutoScan(), 60 * 60 * 1000);
 });
 process.stdin.resume();
