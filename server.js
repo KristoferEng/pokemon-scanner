@@ -730,13 +730,47 @@ async function runAutoScan() {
 }
 
 // ===== MARKET PRICES: all 102 base set cards =====
+// Hardcoded fallback PSA 10 prices (from PriceCharting 3/18/2026)
+// Used when PriceCharting blocks Render's IP
+const FALLBACK_PSA10 = {
+  "Alakazam":1620.64,"Blastoise":6263.98,"Chansey":3051,"Charizard":12221.02,"Clefairy":3268.50,
+  "Gyarados":1790.37,"Hitmonchan":1248.80,"Machamp":null,"Magneton":861.22,"Mewtwo":2750.50,
+  "Nidoking":1150.92,"Ninetales":927.70,"Poliwrath":947.29,"Raichu":2500,"Venusaur":3111.21,
+  "Zapdos":1229.72,"Beedrill":115,"Dragonair":200,"Dugtrio":170,"Electabuzz":155,
+  "Electrode":120,"Pidgeotto":215,"Arcanine":450,"Charmeleon":350,"Dewgong":100,
+  "Dratini":120,"Farfetch'd":100,"Growlithe":175,"Haunter":170,"Ivysaur":295,
+  "Jynx":100,"Kadabra":110,"Kakuna":100,"Machoke":100,"Magikarp":200,
+  "Magmar":100,"Nidorino":100,"Poliwhirl":100,"Porygon":150,"Raticate":100,
+  "Seel":100,"Wartortle":300,"Abra":100,"Bulbasaur":450,"Caterpie":150,
+  "Charmander":750,"Diglett":100,"Doduo":100,"Drowzee":100,"Gastly":120,
+  "Koffing":100,"Machop":100,"Magnemite":100,"Metapod":100,"Nidoran":100,
+  "Onix":120,"Pidgey":100,"Pikachu":800,"Poliwag":100,"Ponyta":120,
+  "Rattata":100,"Sandshrew":100,"Squirtle":500,"Starmie":120,"Staryu":100,
+  "Tangela":100,"Voltorb":100,"Vulpix":150,"Weedle":100,
+};
+
+function buildFallbackMarketPrices() {
+  return BASE_SET_CARDS.map(card => {
+    const type = card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy';
+    const slug = card.name.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    return {
+      number: card.number, name: card.name, type,
+      psa10Price: FALLBACK_PSA10[card.name] || null,
+      ungradedPrice: null,
+      pricechartingUrl: `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${card.number}`,
+    };
+  });
+}
+
 async function fetchAllMarketPrices() {
   console.log("[MarketPrices] Fetching all 102 base set card prices...");
   const prices = [];
+  let successCount = 0;
 
   for (const card of BASE_SET_CARDS) {
     const slug = card.name.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${card.number}`;
+    const type = card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy';
 
     try {
       const pcHtml2 = await fetchPage(directUrl);
@@ -749,7 +783,6 @@ async function fetchAllMarketPrices() {
         if (match) psa10Price = parseFloat(match[1].replace(/,/g, ''));
       }
 
-      // Also try to get ungraded price
       let ungradedPrice = null;
       const ungradedEl = $pc('#used-price');
       if (ungradedEl.length) {
@@ -757,32 +790,42 @@ async function fetchAllMarketPrices() {
         if (match) ungradedPrice = parseFloat(match[1].replace(/,/g, ''));
       }
 
-      const type = card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy';
-
-      prices.push({
-        number: card.number,
-        name: card.name,
-        type,
-        psa10Price,
-        ungradedPrice,
-        pricechartingUrl: directUrl,
-      });
-
+      prices.push({ number: card.number, name: card.name, type, psa10Price, ungradedPrice, pricechartingUrl: directUrl });
+      if (psa10Price) successCount++;
       console.log(`[MarketPrices] #${card.number} ${card.name}: PSA 10 = ${psa10Price ? '$' + psa10Price : 'N/A'}`);
     } catch (err) {
+      // Use fallback price if PriceCharting fails
       prices.push({
-        number: card.number, name: card.name,
-        type: card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy',
-        psa10Price: null, ungradedPrice: null, pricechartingUrl: directUrl,
+        number: card.number, name: card.name, type,
+        psa10Price: FALLBACK_PSA10[card.name] || null,
+        ungradedPrice: null, pricechartingUrl: directUrl,
       });
+      console.log(`[MarketPrices] #${card.number} ${card.name}: using fallback`);
     }
     await delay(1000, 2000);
+
+    // If too many failures, just use fallback for the rest
+    if (prices.length >= 5 && successCount === 0) {
+      console.log("[MarketPrices] PriceCharting appears blocked, using fallback prices for remaining cards.");
+      for (let i = prices.length; i < BASE_SET_CARDS.length; i++) {
+        const c = BASE_SET_CARDS[i];
+        const s = c.name.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+        const t = c.number <= 16 ? 'Holo Rare' : c.number <= 42 ? 'Rare' : c.number <= 69 ? 'Common/Uncommon' : c.number <= 95 ? 'Trainer' : 'Energy';
+        prices.push({
+          number: c.number, name: c.name, type: t,
+          psa10Price: FALLBACK_PSA10[c.name] || null,
+          ungradedPrice: null,
+          pricechartingUrl: `https://www.pricecharting.com/game/pokemon-base-set/${s}-${c.number}`,
+        });
+      }
+      break;
+    }
   }
 
   cachedMarketPrices = prices;
   marketPricesLastUpdate = new Date().toISOString();
   saveCache();
-  console.log(`[MarketPrices] Done. Cached ${prices.length} cards.`);
+  console.log(`[MarketPrices] Done. ${successCount} live prices, ${prices.length - successCount} fallback. Cached.`);
 }
 
 // ===== ENDING AUCTIONS: PSA 10 auctions for specific cards =====
@@ -980,19 +1023,20 @@ const PORT = process.env.PORT || 3456;
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // On deploy: run deals scan + market prices in parallel if needed
+  // On deploy: use fallback prices immediately if no cache, then try live fetch
   setTimeout(async () => {
-    const needsMarketPrices = !cachedMarketPrices || cachedMarketPrices.length === 0;
-    if (needsMarketPrices) {
-      console.log("[Startup] No cached market prices, fetching everything...");
-      // Run both in parallel
-      await Promise.all([runAutoScan(), fetchAllMarketPrices()]);
-      // Re-run deals scan to apply the new market prices
-      await runAutoScan();
+    if (!cachedMarketPrices || cachedMarketPrices.length === 0) {
+      console.log("[Startup] No cached market prices, loading fallback...");
+      cachedMarketPrices = buildFallbackMarketPrices();
+      marketPricesLastUpdate = "2026-03-18T00:00:00Z (fallback)";
+      saveCache();
     } else {
       console.log("[Startup] Using cached market prices from", marketPricesLastUpdate);
-      await runAutoScan();
     }
+    // Run deals scan with whatever prices we have
+    await runAutoScan();
+    // Try fetching live prices in background (will use fallback if blocked)
+    fetchAllMarketPrices().then(() => runAutoScan()).catch(() => {});
   }, 3000);
 
   // Deals scan: every clock hour
