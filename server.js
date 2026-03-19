@@ -859,6 +859,11 @@ async function fetchEndingAuctions() {
         if (/\b(jpn|jap|japanese|japanse|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified)\b/i.test(tl)) continue;
         if (/\bjp\b/i.test(tl)) continue;
         if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|collection|raw|ungraded)\b/i.test(tl)) continue;
+        // Exclude Japanese-language cards (often not in title but are illustration contest / promo cards from Japan)
+        if (/illustration\s*contest|world\s*art|ryo\s*ueda/i.test(tl)) continue;
+        // Exclude items located in Japan (catches Japanese cards even when title doesn't say it)
+        const itemCountry = item.itemLocation?.country || "";
+        if (/^JP$/i.test(itemCountry)) continue;
         if (!tl.includes(cardName)) continue;
 
         const price = extractPrice(item);
@@ -915,8 +920,13 @@ async function fetchEndingAuctions() {
     }
   }
 
-  // Sort: soonest first
-  allAuctions.sort((a, b) => a.minutesLeft - b.minutesLeft);
+  // Sort: US first, then other countries, then by soonest ending
+  allAuctions.sort((a, b) => {
+    const aUS = (a.location || '').toLowerCase().includes('united states') ? 0 : 1;
+    const bUS = (b.location || '').toLowerCase().includes('united states') ? 0 : 1;
+    if (aUS !== bUS) return aUS - bUS;
+    return a.minutesLeft - b.minutesLeft;
+  });
 
   cachedEndingAuctions = allAuctions;
   endingAuctionsLastUpdate = new Date().toISOString();
