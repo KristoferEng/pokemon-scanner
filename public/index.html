@@ -10,9 +10,14 @@
     .container { max-width: 1300px; margin: 0 auto; padding: 20px; }
     h1 { text-align: center; font-size: 2rem; margin: 20px 0 8px; background: linear-gradient(135deg, #fbbf24, #f59e0b); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .subtitle { text-align: center; color: #94a3b8; margin-bottom: 20px; }
-    #goBtn { display: block; margin: 0 auto 20px; padding: 16px 60px; font-size: 1.3rem; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 4px 20px rgba(245,158,11,0.3); }
-    #goBtn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(245,158,11,0.5); }
-    #goBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap; }
+    .tab-btn { padding: 10px 24px; font-size: 1rem; font-weight: 600; border: 2px solid #334155; border-radius: 8px; cursor: pointer; background: #1e293b; color: #94a3b8; transition: all 0.15s; }
+    .tab-btn:hover { border-color: #f59e0b; color: #e2e8f0; }
+    .tab-btn.active { background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; border-color: #f59e0b; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
 
     /* Stats bar */
     .stats { display: flex; gap: 20px; justify-content: center; margin-bottom: 15px; }
@@ -30,7 +35,6 @@
 
     /* Tables */
     h2 { color: #fbbf24; margin: 25px 0 12px; font-size: 1.3rem; border-bottom: 2px solid #1e293b; padding-bottom: 8px; }
-    .results { display: none; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }
     th { background: #1e293b; padding: 10px 8px; text-align: left; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; position: sticky; top: 0; z-index: 1; }
     td { padding: 8px; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }
@@ -43,51 +47,101 @@
     .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; margin-left: 6px; }
     .badge-verified { background: #065f46; color: #34d399; }
     .badge-unverified { background: #7c2d12; color: #fb923c; }
+    .badge-holo { background: #4c1d95; color: #c4b5fd; }
+    .badge-rare { background: #1e3a5f; color: #93c5fd; }
+    .badge-common { background: #1e293b; color: #94a3b8; }
+    .badge-trainer { background: #713f12; color: #fcd34d; }
+    .badge-energy { background: #064e3b; color: #6ee7b7; }
+    .badge-hot { background: #7f1d1d; color: #fca5a5; }
     .empty { text-align: center; color: #64748b; padding: 30px; }
     .count-badge { background: #1e293b; color: #fbbf24; padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin-left: 10px; }
-    .tab-btn { padding: 10px 24px; font-size: 1rem; font-weight: 600; border: 2px solid #334155; border-radius: 8px; cursor: pointer; background: #1e293b; color: #94a3b8; transition: all 0.15s; }
-    .tab-btn:hover { border-color: #f59e0b; color: #e2e8f0; }
-    .tab-btn.active { background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; border-color: #f59e0b; }
+    #goBtn { display: block; margin: 0 auto 20px; padding: 12px 40px; font-size: 1rem; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; background: linear-gradient(135deg, #f59e0b, #d97706); color: #0f172a; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 4px 20px rgba(245,158,11,0.3); }
+    #goBtn:hover { transform: scale(1.05); box-shadow: 0 6px 30px rgba(245,158,11,0.5); }
+    #goBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .refresh-btn { padding: 8px 20px; font-size: 0.9rem; font-weight: 600; border: 2px solid #334155; border-radius: 8px; cursor: pointer; background: #1e293b; color: #94a3b8; margin: 0 auto 15px; display: block; }
+    .refresh-btn:hover { border-color: #f59e0b; color: #e2e8f0; }
+    .time-urgent { color: #f87171; font-weight: 700; }
+    .time-warn { color: #fbbf24; font-weight: 600; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>PSA 10 Base Set Pokemon Scanner</h1>
-    <p class="subtitle">Scans eBay for PSA 10 Base Set Unlimited Pokemon cards &amp; compares to PriceCharting market prices</p>
     <p class="subtitle" id="lastScanInfo" style="color:#fbbf24;"></p>
 
-    <button id="goBtn" onclick="startScan()">Go (Live Scan)</button>
-
-    <div class="stats" id="stats" style="display:none;">
-      <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
-      <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Priced</div></div>
-      <div class="stat"><div class="stat-value" id="phase">1/2</div><div class="stat-label">Phase</div></div>
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('deals')">Deals</button>
+      <button class="tab-btn" onclick="switchTab('auctions')">Ending Auctions</button>
+      <button class="tab-btn" onclick="switchTab('market')">Market Prices</button>
     </div>
 
-    <div id="logContainer"></div>
+    <!-- TAB 1: Deals (existing functionality) -->
+    <div class="tab-content active" id="tab-deals">
+      <button id="goBtn" onclick="startScan()">Run Live Scan</button>
 
-    <div class="results" id="results">
-      <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
-      <table id="binTable">
+      <div class="stats" id="stats" style="display:none;">
+        <div class="stat"><div class="stat-value" id="foundCount">0</div><div class="stat-label">Found</div></div>
+        <div class="stat"><div class="stat-value" id="verifiedCount">0</div><div class="stat-label">Priced</div></div>
+        <div class="stat"><div class="stat-value" id="phase">1/2</div><div class="stat-label">Phase</div></div>
+      </div>
+
+      <div id="logContainer"></div>
+
+      <div id="dealsResults">
+        <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
+        <table id="binTable">
+          <thead>
+            <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
+        <table id="auctionTable">
+          <thead>
+            <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 2: Ending Auctions -->
+    <div class="tab-content" id="tab-auctions">
+      <button class="refresh-btn" onclick="loadEndingAuctions()">Refresh Ending Auctions</button>
+      <p class="subtitle">Auctions ending in the next 60 minutes, $25-$5,000, sorted by biggest discount vs market</p>
+      <div id="endingAuctionsLoading" class="empty" style="display:none;">Loading ending auctions...</div>
+      <table id="endingAuctionsTable">
         <thead>
-          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Savings</th><th>% Below Market</th><th>Ends In</th><th>End Time</th><th>Location</th><th>eBay</th></tr>
         </thead>
         <tbody></tbody>
       </table>
-      <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
-      <table id="auctionTable">
+    </div>
+
+    <!-- TAB 3: Market Prices -->
+    <div class="tab-content" id="tab-market">
+      <p class="subtitle" id="marketLastUpdate"></p>
+      <table id="marketTable">
         <thead>
-          <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>#</th><th>Card</th><th>Type</th><th>PSA 10 Price</th><th>Ungraded Price</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
-
   </div>
 
   <script>
-    let foundCount = 0;
-    let verifiedCount = 0;
+    // Tab switching
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach((b, i) => {
+        b.classList.toggle('active', ['deals','auctions','market'][i] === tab);
+      });
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.getElementById('tab-' + tab).classList.add('active');
+
+      if (tab === 'auctions') loadEndingAuctions();
+      if (tab === 'market') loadMarketPrices();
+    }
 
     function getTime() {
       return new Date().toLocaleTimeString('en-US', { hour12: false });
@@ -103,14 +157,12 @@
       container.scrollTop = container.scrollHeight;
     }
 
+    // ===== DEALS TAB =====
     function startScan() {
       const btn = document.getElementById('goBtn');
       btn.disabled = true;
-      foundCount = 0;
-      verifiedCount = 0;
 
       document.getElementById('stats').style.display = 'flex';
-      document.getElementById('results').style.display = 'none';
       document.getElementById('logContainer').innerHTML = '';
       document.querySelector('#binTable tbody').innerHTML = '';
       document.querySelector('#auctionTable tbody').innerHTML = '';
@@ -121,49 +173,32 @@
       addLog('Starting scan...', 'info');
 
       const es = new EventSource('/api/scan');
-
       es.onmessage = (e) => {
         const data = JSON.parse(e.data);
-
         if (data.type === 'log') {
-          // Detect phase
           if (data.message.includes('Phase 2')) document.getElementById('phase').textContent = '2/2';
           addLog(data.message, 'info');
-        }
-        else if (data.type === 'found') {
-          foundCount = data.count;
-          document.getElementById('foundCount').textContent = foundCount;
+        } else if (data.type === 'found') {
+          document.getElementById('foundCount').textContent = data.count;
           addLog(`Found: ${data.latest} ($${data.price.toFixed(2)}) - Total: ${data.count}`, 'success');
-        }
-        else if (data.type === 'verified') {
-          verifiedCount = data.count;
-          document.getElementById('verifiedCount').textContent = verifiedCount;
-        }
-        else if (data.type === 'error') {
+        } else if (data.type === 'verified') {
+          document.getElementById('verifiedCount').textContent = data.count;
+        } else if (data.type === 'error') {
           addLog(`ERROR: ${data.message}`, 'error');
-        }
-        else if (data.type === 'result') {
-          document.getElementById('results').style.display = 'block';
+        } else if (data.type === 'result') {
           document.getElementById('binCount').textContent = data.buyItNow.length;
           document.getElementById('auctionCount').textContent = data.auctions.length;
-          renderTable('#binTable tbody', data.buyItNow);
-          renderTable('#auctionTable tbody', data.auctions);
-        }
-        else if (data.type === 'done') {
+          renderDealTable('#binTable tbody', data.buyItNow);
+          renderDealTable('#auctionTable tbody', data.auctions);
+        } else if (data.type === 'done') {
           addLog('Scan complete!', 'success');
           btn.disabled = false;
           es.close();
         }
       };
-
-      es.onerror = () => {
-        addLog('Connection lost to server.', 'error');
-        btn.disabled = false;
-        es.close();
-      };
+      es.onerror = () => { addLog('Connection lost.', 'error'); btn.disabled = false; es.close(); };
     }
 
-    // Load cached results on page load
     async function loadCached() {
       try {
         const resp = await fetch('/api/cached-results');
@@ -171,28 +206,25 @@
         if (data.lastScanTime) {
           const t = new Date(data.lastScanTime);
           document.getElementById('lastScanInfo').textContent =
-            'Last auto-scan: ' + t.toLocaleString() + (data.scanInProgress ? ' (scan in progress...)' : ' — auto-refreshes hourly');
+            'Last scan: ' + t.toLocaleString() + (data.scanInProgress ? ' (scanning...)' : ' — auto-refreshes hourly');
         }
         if (data.results) {
-          document.getElementById('results').style.display = 'block';
           document.getElementById('binCount').textContent = data.results.buyItNow.length;
           document.getElementById('auctionCount').textContent = data.results.auctions.length;
-          renderTable('#binTable tbody', data.results.buyItNow);
-          renderTable('#auctionTable tbody', data.results.auctions);
+          renderDealTable('#binTable tbody', data.results.buyItNow);
+          renderDealTable('#auctionTable tbody', data.results.auctions);
         } else if (data.scanInProgress) {
           document.getElementById('lastScanInfo').textContent = 'First scan in progress... refresh in a minute.';
         }
       } catch {}
     }
     loadCached();
-    // Refresh cached results every 5 minutes
     setInterval(loadCached, 5 * 60 * 1000);
 
-    function renderTable(selector, items, showTime) {
+    function renderDealTable(selector, items) {
       const tbody = document.querySelector(selector);
-      const cols = showTime ? 10 : 8;
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">No items found</td></tr>`;
+        tbody.innerHTML = '<tr><td colspan="8" class="empty">No items found</td></tr>';
         return;
       }
       let html = '';
@@ -206,11 +238,7 @@
           ? '<span class="badge badge-verified">Verified</span>'
           : '<span class="badge badge-unverified">Unverified</span>';
         const pcLink = item.pricechartingUrl
-          ? `<a href="${item.pricechartingUrl}" target="_blank">View</a>`
-          : 'N/A';
-        const timeCols = showTime
-          ? `<td>${item.timeLeft || '—'}</td><td>${item.endTime || '—'}</td>`
-          : '';
+          ? `<a href="${item.pricechartingUrl}" target="_blank">View</a>` : 'N/A';
         const pctClass = item.pctOverMarket != null ? (item.pctOverMarket < 0 ? 'negative' : 'positive') : '';
         const pctText = item.pctOverMarket != null
           ? (item.pctOverMarket < 0 ? item.pctOverMarket.toFixed(1) + '%' : '+' + item.pctOverMarket.toFixed(1) + '%')
@@ -221,13 +249,106 @@
           <td>${mp}</td>
           <td class="${diffClass}">${diffText}</td>
           <td class="${pctClass}">${pctText}</td>
-          ${timeCols}
           <td>${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
           <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
           <td>${pcLink}</td>
         </tr>`;
       }
       tbody.innerHTML = html;
+    }
+
+    // ===== ENDING AUCTIONS TAB =====
+    async function loadEndingAuctions() {
+      const tbody = document.querySelector('#endingAuctionsTable tbody');
+      const loading = document.getElementById('endingAuctionsLoading');
+      loading.style.display = 'block';
+      tbody.innerHTML = '';
+
+      try {
+        const resp = await fetch('/api/ending-auctions');
+        const data = await resp.json();
+        loading.style.display = 'none';
+
+        if (!data.auctions || !data.auctions.length) {
+          tbody.innerHTML = '<tr><td colspan="9" class="empty">No auctions ending in the next 60 minutes</td></tr>';
+          return;
+        }
+
+        let html = '';
+        for (const item of data.auctions) {
+          const savings = item.difference != null ? Math.abs(item.difference).toFixed(2) : null;
+          const savingsText = savings != null
+            ? (item.difference < 0 ? '<span class="negative">$' + savings + ' below</span>' : '<span class="positive">$' + savings + ' above</span>')
+            : 'N/A';
+          const mp = item.marketPrice != null ? '$' + item.marketPrice.toFixed(2) : 'N/A';
+          const pctClass = item.pctOverMarket != null ? (item.pctOverMarket < 0 ? 'negative' : 'positive') : '';
+          const pctText = item.pctOverMarket != null
+            ? (item.pctOverMarket < 0 ? item.pctOverMarket.toFixed(1) + '%' : '+' + item.pctOverMarket.toFixed(1) + '%')
+            : 'N/A';
+          const timeClass = item.minutesLeft <= 10 ? 'time-urgent' : item.minutesLeft <= 30 ? 'time-warn' : '';
+          const hotBadge = item.difference != null && item.difference < -50 ? '<span class="badge badge-hot">HOT</span>' : '';
+
+          html += `<tr>
+            <td>${item.name}${hotBadge}</td>
+            <td class="price">$${item.price.toFixed(2)}</td>
+            <td>${mp}</td>
+            <td>${savingsText}</td>
+            <td class="${pctClass}">${pctText}</td>
+            <td class="${timeClass}">${item.minutesLeft}m</td>
+            <td>${item.endTime}</td>
+            <td>${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
+            <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
+          </tr>`;
+        }
+        tbody.innerHTML = html;
+      } catch (e) {
+        loading.style.display = 'none';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">Error loading auctions: ' + e.message + '</td></tr>';
+      }
+    }
+
+    // ===== MARKET PRICES TAB =====
+    async function loadMarketPrices() {
+      const tbody = document.querySelector('#marketTable tbody');
+      try {
+        const resp = await fetch('/api/market-prices');
+        const data = await resp.json();
+
+        if (data.lastUpdate) {
+          document.getElementById('marketLastUpdate').textContent =
+            'Last updated: ' + new Date(data.lastUpdate).toLocaleString();
+        }
+
+        if (!data.prices || !data.prices.length) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Market prices loading... check back in a few minutes.</td></tr>';
+          return;
+        }
+
+        let html = '';
+        for (const card of data.prices) {
+          const typeBadge = card.type === 'Holo Rare' ? '<span class="badge badge-holo">Holo</span>'
+            : card.type === 'Rare' ? '<span class="badge badge-rare">Rare</span>'
+            : card.type === 'Trainer' ? '<span class="badge badge-trainer">Trainer</span>'
+            : card.type === 'Energy' ? '<span class="badge badge-energy">Energy</span>'
+            : '<span class="badge badge-common">C/UC</span>';
+          const psa10 = card.psa10Price != null ? '$' + card.psa10Price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
+          const ungraded = card.ungradedPrice != null ? '$' + card.ungradedPrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
+          const pcLink = card.pricechartingUrl
+            ? `<a href="${card.pricechartingUrl}" target="_blank">View</a>` : 'N/A';
+
+          html += `<tr>
+            <td>${card.number}</td>
+            <td>${card.name} ${typeBadge}</td>
+            <td>${card.type}</td>
+            <td class="price">${psa10}</td>
+            <td>${ungraded}</td>
+            <td>${pcLink}</td>
+          </tr>`;
+        }
+        tbody.innerHTML = html;
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">Error: ' + e.message + '</td></tr>';
+      }
     }
   </script>
 </body>

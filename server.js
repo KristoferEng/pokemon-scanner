@@ -723,6 +723,165 @@ app.get("/api/cached-results", (req, res) => {
   });
 });
 
+// ===== MARKET PRICES: all 102 base set cards =====
+let cachedMarketPrices = null;
+let marketPricesLastUpdate = null;
+
+async function fetchAllMarketPrices() {
+  console.log("[MarketPrices] Fetching all 102 base set card prices...");
+  const prices = [];
+
+  for (const card of BASE_SET_CARDS) {
+    const slug = card.name.toLowerCase().replace(/'/g, "%27").replace(/[^a-z0-9%]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    const directUrl = `https://www.pricecharting.com/game/pokemon-base-set/${slug}-${card.number}`;
+
+    try {
+      const pcResp = await gotScraping({
+        url: directUrl,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36' },
+        responseType: 'text',
+        timeout: { request: 15000 },
+        retry: { limit: 1 },
+      });
+      const $pc = cheerio.load(pcResp.body);
+
+      let psa10Price = null;
+      const priceEl = $pc('#manual_only_price');
+      if (priceEl.length) {
+        const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+        if (match) psa10Price = parseFloat(match[1].replace(/,/g, ''));
+      }
+
+      // Also try to get ungraded price
+      let ungradedPrice = null;
+      const ungradedEl = $pc('#used-price');
+      if (ungradedEl.length) {
+        const match = ungradedEl.text().match(/\$([\d,]+\.?\d*)/);
+        if (match) ungradedPrice = parseFloat(match[1].replace(/,/g, ''));
+      }
+
+      const type = card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy';
+
+      prices.push({
+        number: card.number,
+        name: card.name,
+        type,
+        psa10Price,
+        ungradedPrice,
+        pricechartingUrl: directUrl,
+      });
+
+      console.log(`[MarketPrices] #${card.number} ${card.name}: PSA 10 = ${psa10Price ? '$' + psa10Price : 'N/A'}`);
+    } catch (err) {
+      prices.push({
+        number: card.number, name: card.name,
+        type: card.number <= 16 ? 'Holo Rare' : card.number <= 42 ? 'Rare' : card.number <= 69 ? 'Common/Uncommon' : card.number <= 95 ? 'Trainer' : 'Energy',
+        psa10Price: null, ungradedPrice: null, pricechartingUrl: directUrl,
+      });
+    }
+    await delay(1000, 2000);
+  }
+
+  cachedMarketPrices = prices;
+  marketPricesLastUpdate = new Date().toISOString();
+  console.log(`[MarketPrices] Done. Cached ${prices.length} cards.`);
+}
+
+app.get("/api/market-prices", (req, res) => {
+  res.json({
+    prices: cachedMarketPrices,
+    lastUpdate: marketPricesLastUpdate,
+  });
+});
+
+// ===== ENDING AUCTIONS: auctions ending within 60 min =====
+app.get("/api/ending-auctions", async (req, res) => {
+  try {
+    const token = await getEbayToken();
+    const allAuctions = [];
+    const seenIds = new Set();
+
+    // Search for PSA 10 base set auctions, sorted by endingSoonest
+    const query = "psa 10 base set pokemon -shadowless -1st -bgs -cgc -pack -booster -celebrations -evolutions -reprint";
+    const filters = "price:[25..5000],priceCurrency:USD,buyingOptions:{AUCTION}";
+    const pageSize = 200;
+    const maxPages = 3;
+
+    for (let page = 0; page < maxPages; page++) {
+      const offset = page * pageSize;
+      try {
+        const result = await ebaySearch(query, "183454", pageSize, offset, filters, "endingSoonest");
+        const items = result.itemSummaries || [];
+        if (items.length === 0) break;
+
+        for (const item of items) {
+          const itemId = item.itemId;
+          if (!itemId || seenIds.has(itemId)) continue;
+          const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
+          if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
+
+          const title = item.title || "";
+          const cardName = identifyCard(title);
+          if (!cardName) continue;
+
+          const price = extractPrice(item);
+          if (price === null || price < 25 || price > 5000) continue;
+
+          // Check if auction ends within 60 minutes
+          const endDate = item.itemEndDate ? new Date(item.itemEndDate) : null;
+          if (!endDate) continue;
+          const minutesLeft = (endDate - Date.now()) / 60000;
+          if (minutesLeft < 0 || minutesLeft > 60) continue;
+
+          const location = countryFromLocation(extractLocation(item));
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
+
+          // Look up market price from cached prices
+          let marketPrice = null;
+          let pricechartingUrl = null;
+          if (cachedMarketPrices) {
+            const mp = cachedMarketPrices.find(c => c.name === cardName);
+            if (mp) {
+              marketPrice = mp.psa10Price;
+              pricechartingUrl = mp.pricechartingUrl;
+            }
+          }
+
+          const difference = marketPrice != null ? price - marketPrice : null;
+          const pctOverMarket = marketPrice != null && marketPrice > 0
+            ? ((price - marketPrice) / marketPrice) * 100 : null;
+
+          seenIds.add(itemId);
+          allAuctions.push({
+            name: cardName, title, price, marketPrice, difference, pctOverMarket,
+            ebayUrl, pricechartingUrl, location, verified: !!marketPrice,
+            endTime: endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            minutesLeft: Math.round(minutesLeft),
+          });
+        }
+
+        const total = result.total || 0;
+        if (offset + items.length >= total) break;
+      } catch (err) {
+        console.error("[EndingAuctions] Error:", err.message);
+        break;
+      }
+    }
+
+    // Sort by biggest discount (most negative difference first)
+    allAuctions.sort((a, b) => {
+      if (a.difference == null) return 1;
+      if (b.difference == null) return -1;
+      return a.difference - b.difference;
+    });
+
+    res.json({ auctions: allAuctions });
+  } catch (e) {
+    console.error("[EndingAuctions] Error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3456;
 gotReady.then(() => {
   const server = app.listen(PORT, () => {
@@ -731,8 +890,14 @@ gotReady.then(() => {
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // Run first scan after 5 seconds, then every hour
-  setTimeout(() => runAutoScan(), 5000);
-  setInterval(() => runAutoScan(), 60 * 60 * 1000);
+  // Run market prices first, then scan, then hourly
+  setTimeout(async () => {
+    await fetchAllMarketPrices();
+    await runAutoScan();
+  }, 5000);
+  setInterval(async () => {
+    await fetchAllMarketPrices();
+    await runAutoScan();
+  }, 60 * 60 * 1000);
 });
 process.stdin.resume();
