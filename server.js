@@ -789,15 +789,22 @@ async function fetchAllMarketPrices() {
 const AUCTION_CARDS = ["dragonite", "pikachu", "vulpix", "wigglytuff"];
 const MAX_PER_CARD = 10;
 
-// PriceCharting PSA 10 price cache for auction cards
+// PriceCharting lookup cache keyed by search term
 let auctionPriceCache = {};
 
-async function getAuctionCardPrice(cardName) {
-  if (auctionPriceCache[cardName] !== undefined) return auctionPriceCache[cardName];
+async function getAuctionCardPrice(title) {
+  // Build a search key from the eBay title: card name + set + card number
+  // e.g. "2019 POKEMON SUN & MOON UNIFIED MINDS #152 DRAGONITE GX PSA 10" -> "pokemon unified minds 152 dragonite gx"
+  let searchKey = title
+    .replace(/psa\s*10/i, '').replace(/gem\s*mint/i, '')
+    .replace(/\b\d{4}\b/g, '') // remove years
+    .replace(/\b(graded|slab|card|tcg|holo|rare|eng?|en\b)\b/gi, '')
+    .replace(/[^\w\s#\/&-]/g, ' ').replace(/\s+/g, ' ').trim();
 
-  // Search PriceCharting for PSA 10 price
+  if (auctionPriceCache[searchKey] !== undefined) return auctionPriceCache[searchKey];
+
   try {
-    const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent('pokemon ' + cardName + ' psa 10')}&type=prices`;
+    const searchUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(searchKey)}&type=prices`;
     const html = await fetchPage(searchUrl);
     const $ = cheerio.load(html);
     const firstResult = $('table#games_table a[href*="game/"]').first();
@@ -812,14 +819,14 @@ async function getAuctionCardPrice(cardName) {
         const match = priceEl.text().match(/\$([\d,]+\.?\d*)/);
         if (match) marketPrice = parseFloat(match[1].replace(/,/g, ''));
       }
-      console.log(`[AuctionPC] ${cardName}: PSA 10 = $${marketPrice || 'N/A'} (${pcUrl})`);
-      auctionPriceCache[cardName] = { marketPrice, pcUrl };
-      return auctionPriceCache[cardName];
+      console.log(`[AuctionPC] "${searchKey.substring(0,50)}" -> $${marketPrice || 'N/A'} (${pcUrl})`);
+      auctionPriceCache[searchKey] = { marketPrice, pcUrl };
+      return auctionPriceCache[searchKey];
     }
   } catch (err) {
-    console.error(`[AuctionPC] Error for ${cardName}:`, err.message);
+    console.error(`[AuctionPC] Error: ${err.message}`);
   }
-  auctionPriceCache[cardName] = null;
+  auctionPriceCache[searchKey] = null;
   return null;
 }
 
@@ -908,19 +915,19 @@ async function fetchEndingAuctions() {
     }
   }
 
-  // PriceCharting PSA 10 market prices for each card
-  for (const cardName of AUCTION_CARDS) {
-    const pc = await getAuctionCardPrice(cardName);
-    if (!pc || !pc.marketPrice) continue;
-    for (const a of allAuctions) {
-      if (a.name.toLowerCase() === cardName) {
+  // Look up PriceCharting for each auction using its specific title
+  for (const a of allAuctions) {
+    try {
+      const pc = await getAuctionCardPrice(a.title);
+      if (pc && pc.marketPrice) {
         a.marketPrice = pc.marketPrice;
         a.pricechartingUrl = pc.pcUrl;
         a.verified = true;
         a.difference = a.price - pc.marketPrice;
         a.pctOverMarket = pc.marketPrice > 0 ? ((a.price - pc.marketPrice) / pc.marketPrice) * 100 : null;
       }
-    }
+    } catch {}
+    await delay(1000, 1500);
   }
 
   // Sort: US first, then other countries, then by soonest ending
