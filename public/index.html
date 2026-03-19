@@ -63,22 +63,19 @@
     .time-urgent { color: #f87171; font-weight: 700; }
     .time-warn { color: #fbbf24; font-weight: 600; }
 
-    /* Mobile styles */
+    /* Mobile styles - keep table layout, just smaller */
     @media (max-width: 768px) {
-      .container { padding: 10px; }
-      h1 { font-size: 1.4rem; margin: 10px 0 6px; }
-      .subtitle { font-size: 0.75rem; }
-      #goBtn { padding: 10px 30px; font-size: 0.9rem; }
-      h2 { font-size: 1.1rem; margin: 15px 0 8px; }
-
-      /* Convert tables to card layout */
-      table, thead, tbody, th, tr, td { display: block; }
-      thead { display: none; }
-      tr { background: #1e293b; border-radius: 8px; margin-bottom: 10px; padding: 12px; position: relative; }
-      tr:hover td { background: transparent; }
-      td { padding: 4px 0; border: none; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; }
-      td::before { content: attr(data-label); font-weight: 600; color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0; margin-right: 10px; }
-      .price { font-size: 1rem; }
+      .container { padding: 6px; }
+      h1 { font-size: 1.3rem; margin: 10px 0 4px; }
+      .subtitle { font-size: 0.7rem; }
+      #goBtn { padding: 8px 24px; font-size: 0.85rem; }
+      h2 { font-size: 1rem; margin: 12px 0 6px; }
+      table { font-size: 0.7rem; }
+      th { padding: 6px 4px; font-size: 0.65rem; }
+      td { padding: 5px 4px; font-size: 0.7rem; }
+      .badge { font-size: 0px; padding: 0; margin: 0; display: none; }
+      .count-badge { font-size: 0.7rem; padding: 2px 8px; }
+      td:nth-child(6) { max-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     }
   </style>
 </head>
@@ -225,6 +222,20 @@
     loadCached();
     setInterval(loadCached, 5 * 60 * 1000);
 
+    const isMobile = () => window.innerWidth <= 768;
+    function shortLoc(loc) {
+      if (!loc) return '—';
+      const l = loc.toLowerCase();
+      if (l.includes('united states')) return 'US';
+      if (l.includes('canada')) return 'CA';
+      if (l.includes('united kingdom')) return 'UK';
+      if (l.includes('australia')) return 'AU';
+      if (l.includes('japan')) return 'JP';
+      if (l.includes('france')) return 'FR';
+      if (l.includes('germany')) return 'DE';
+      return loc.substring(0, 2).toUpperCase();
+    }
+
     function renderDealTable(selector, items) {
       const tbody = document.querySelector(selector);
       if (!items.length) {
@@ -253,7 +264,7 @@
           <td data-label="Market">${mp}</td>
           <td data-label="Diff" class="${diffClass}">${diffText}</td>
           <td data-label="% Over" class="${pctClass}">${pctText}</td>
-          <td data-label="Location">${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
+          <td data-label="Location">${isMobile() ? shortLoc(item.location) : (item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—')}</td>
           <td data-label="eBay"><a href="${item.ebayUrl}" target="_blank">View</a></td>
           <td data-label="PC">${pcLink}</td>
         </tr>`;
