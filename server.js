@@ -569,7 +569,10 @@ app.get("/api/scan-card", async (req, res) => {
 
 // ===== CACHED DATA (persisted to disk) =====
 const fs = require("fs");
-const CACHE_FILE = path.join(__dirname, ".cache.json");
+// Use /tmp for cache on Render (survives restarts but not disk wipes)
+// Use project dir locally
+const CACHE_DIR = process.env.RENDER ? "/tmp" : __dirname;
+const CACHE_FILE = path.join(CACHE_DIR, ".pokemon-cache.json");
 
 let cachedResults = null;
 let lastScanTime = null;
@@ -970,13 +973,17 @@ const PORT = process.env.PORT || 3456;
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // On deploy: run deals scan immediately, market prices only if not cached
+  // On deploy: run deals scan + market prices in parallel if needed
   setTimeout(async () => {
-    await runAutoScan();
-    if (!cachedMarketPrices || cachedMarketPrices.length === 0) {
-      console.log("[Scheduler] No cached market prices, fetching now...");
-      await fetchAllMarketPrices();
-      // Re-run scan to apply new prices
+    const needsMarketPrices = !cachedMarketPrices || cachedMarketPrices.length === 0;
+    if (needsMarketPrices) {
+      console.log("[Startup] No cached market prices, fetching everything...");
+      // Run both in parallel
+      await Promise.all([runAutoScan(), fetchAllMarketPrices()]);
+      // Re-run deals scan to apply the new market prices
+      await runAutoScan();
+    } else {
+      console.log("[Startup] Using cached market prices from", marketPricesLastUpdate);
       await runAutoScan();
     }
   }, 3000);
