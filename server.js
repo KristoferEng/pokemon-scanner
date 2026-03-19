@@ -808,33 +808,73 @@ async function fetchAllMarketPrices() {
   console.log(`[MarketPrices] Done. Cached ${prices.length} cards.`);
 }
 
-// ===== ENDING AUCTIONS: any PSA 10 Pokemon auction ending within 60 min =====
+// ===== ENDING AUCTIONS: PSA 10 auctions for specific cards =====
+const POKEWALLET_API_KEY = process.env.POKEWALLET_API_KEY || "";
+const AUCTION_CARDS = ["dragonite", "pikachu", "vulpix", "wigglytuff"];
+const MAX_PER_CARD = 10;
+
+// PokéWallet market price cache (persists in memory, refreshed hourly with everything else)
+let pokewalletCache = {};
+
+async function getPokewalletPrice(cardName) {
+  if (pokewalletCache[cardName] !== undefined) return pokewalletCache[cardName];
+  if (!POKEWALLET_API_KEY) { pokewalletCache[cardName] = null; return null; }
+
+  try {
+    const resp = await fetch(`https://api.pokewallet.io/search?q=${encodeURIComponent(cardName)}&limit=5`, {
+      headers: { "X-API-Key": POKEWALLET_API_KEY },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) { pokewalletCache[cardName] = null; return null; }
+    const data = await resp.json();
+    // Find a matching card and get market price from TCGPlayer data
+    const cards = data.data || data.cards || data || [];
+    let marketPrice = null;
+    let cardUrl = null;
+    for (const card of (Array.isArray(cards) ? cards : [])) {
+      // Look for a holofoil or normal market price
+      const prices = card.tcgplayer_prices || card.prices || [];
+      for (const p of (Array.isArray(prices) ? prices : [])) {
+        if (p.market_price && p.market_price > 0) {
+          marketPrice = p.market_price;
+          break;
+        }
+      }
+      if (card.url || card.tcgplayer_url) cardUrl = card.url || card.tcgplayer_url;
+      if (marketPrice) break;
+    }
+    pokewalletCache[cardName] = { marketPrice, cardUrl };
+    return pokewalletCache[cardName];
+  } catch (err) {
+    console.error(`[PokéWallet] Error for ${cardName}:`, err.message);
+    pokewalletCache[cardName] = null;
+    return null;
+  }
+}
+
 app.get("/api/ending-auctions", async (req, res) => {
   try {
     const allAuctions = [];
     const seenIds = new Set();
 
-    // Broad search: any PSA 10 Pokemon card auction
-    const query = '"psa 10" pokemon -bgs -cgc -sgc -pack -booster -lot -bundle -raw -ungraded -japanese -japan -jpn -korean -chinese -spanish -french -german';
-    const filters = "price:[25..5000],priceCurrency:USD,buyingOptions:{AUCTION}";
-    const pageSize = 200;
-    const maxPages = 5;
+    // Search for each card individually
+    for (const cardName of AUCTION_CARDS) {
+      let found = 0;
+      const query = `"psa 10" ${cardName} pokemon -bgs -cgc -sgc -lot -bundle -raw -ungraded -japanese -japan -jpn -korean -chinese`;
+      const filters = "price:[10..1000],priceCurrency:USD,buyingOptions:{AUCTION}";
 
-    for (let page = 0; page < maxPages; page++) {
-      const offset = page * pageSize;
       try {
-        const result = await ebaySearch(query, "183454", pageSize, offset, filters, "endingSoonest");
+        const result = await ebaySearch(query, "183454", 50, 0, filters, "endingSoonest");
         const items = result.itemSummaries || [];
-        if (items.length === 0) break;
 
-        let pastWindow = false;
         for (const item of items) {
-          // Check end time first — since sorted by endingSoonest, once past 60m we're done
+          if (found >= MAX_PER_CARD) break;
+
           const endDate = item.itemEndDate ? new Date(item.itemEndDate) : null;
           if (!endDate) continue;
           const minutesLeft = (endDate - Date.now()) / 60000;
           if (minutesLeft < 0) continue;
-          if (minutesLeft > 60) { pastWindow = true; break; }
+          if (minutesLeft > 60) break; // sorted by endingSoonest
 
           const itemId = item.itemId;
           if (!itemId || seenIds.has(itemId)) continue;
@@ -843,78 +883,56 @@ app.get("/api/ending-auctions", async (req, res) => {
 
           const title = item.title || "";
           const tl = title.toLowerCase();
-          // Must actually say "PSA 10" in the title
           if (!/psa\s*10/i.test(title)) continue;
-          // Exclude other graders
           if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) continue;
-          // Exclude Japanese, Chinese, Korean, Spanish, French, German, etc.
-          if (/\b(jpn|jap|japanese|japanse|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified|chi|kor|svk)\b/i.test(tl)) continue;
+          if (/\b(jpn|jap|japanese|japanse|japan|chinese|korean|spanish|french|german|italian|portuguese|simplified)\b/i.test(tl)) continue;
           if (/\bjp\b/i.test(tl)) continue;
-          // Exclude non-slab / non-card items
           if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|collection|raw|ungraded)\b/i.test(tl)) continue;
-          // Exclude Base Set 2, Celebrations, XY Evolutions (reprints)
-          if (/base\s*(set\s*)?2|base\s*ii\b/i.test(tl)) continue;
-          if (/\bcelebrations\b/i.test(tl)) continue;
-          if (/\bxy\s*evolutions\b|evolutions\s*(holo|#|\d)/i.test(tl)) continue;
-          // Exclude "XY Evolutions" but keep "Prismatic Evolutions", "Mega Evolutions" (real sets)
-          if (/\b(2016|2017)\b.*\bevolutions\b/i.test(tl)) continue;
+          // Must contain the card name
+          if (!tl.includes(cardName)) continue;
 
           const price = extractPrice(item);
-          if (price === null || price < 25 || price > 5000) continue;
+          if (price === null || price < 10 || price > 1000) continue;
 
           const location = countryFromLocation(extractLocation(item));
           const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
 
-          // Extract a card name from title for display
-          let displayName = title
-            .replace(/psa\s*10/i, '').replace(/gem\s*mint/i, '')
-            .replace(/\d{4}\s*pokemon/i, 'Pokemon')
-            .replace(/\b(holo|holographic|rare|promo)\b/gi, '')
-            .replace(/[#\d]+\/\d+/g, '')
-            .replace(/\s+/g, ' ').trim();
-          if (displayName.length > 60) displayName = displayName.substring(0, 57) + '...';
-
-          // Try to match to base set for market price lookup
-          let marketPrice = null;
-          let pricechartingUrl = null;
-          const baseCard = identifyCard(title);
-          if (baseCard && cachedMarketPrices) {
-            const mp = cachedMarketPrices.find(c => c.name === baseCard);
-            if (mp) {
-              marketPrice = mp.psa10Price;
-              pricechartingUrl = mp.pricechartingUrl;
-            }
-          }
-
-          const difference = marketPrice != null ? price - marketPrice : null;
-          const pctOverMarket = marketPrice != null && marketPrice > 0
-            ? ((price - marketPrice) / marketPrice) * 100 : null;
-
           seenIds.add(itemId);
+          found++;
+
           allAuctions.push({
-            name: baseCard || displayName, title, price, marketPrice, difference, pctOverMarket,
-            ebayUrl, pricechartingUrl, location, verified: !!marketPrice,
+            name: cardName.charAt(0).toUpperCase() + cardName.slice(1),
+            title, price, ebayUrl, location,
             endTime: endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' }),
             minutesLeft: Math.round(minutesLeft),
+            // Market data filled in below
+            marketPrice: null, difference: null, pctOverMarket: null, pricechartingUrl: null, verified: false,
           });
         }
-
-        if (pastWindow) break;
-        const total = result.total || 0;
-        if (offset + items.length >= total) break;
       } catch (err) {
-        console.error("[EndingAuctions] Error:", err.message);
-        break;
+        console.error(`[EndingAuctions] Error for ${cardName}:`, err.message);
       }
     }
 
-    // Sort: verified (has market price) first by biggest discount, then unverified by price
-    allAuctions.sort((a, b) => {
-      if (a.difference != null && b.difference == null) return -1;
-      if (a.difference == null && b.difference != null) return 1;
-      if (a.difference != null && b.difference != null) return a.difference - b.difference;
-      return a.price - b.price;
-    });
+    // Look up market prices via PokéWallet for each unique card
+    if (POKEWALLET_API_KEY) {
+      for (const cardName of AUCTION_CARDS) {
+        const pw = await getPokewalletPrice(cardName + " psa 10 pokemon");
+        if (!pw || !pw.marketPrice) continue;
+        for (const a of allAuctions) {
+          if (a.name.toLowerCase() === cardName) {
+            a.marketPrice = pw.marketPrice;
+            a.pricechartingUrl = pw.cardUrl;
+            a.verified = true;
+            a.difference = a.price - pw.marketPrice;
+            a.pctOverMarket = pw.marketPrice > 0 ? ((a.price - pw.marketPrice) / pw.marketPrice) * 100 : null;
+          }
+        }
+      }
+    }
+
+    // Sort by end time (soonest first)
+    allAuctions.sort((a, b) => a.minutesLeft - b.minutesLeft);
 
     res.json({ auctions: allAuctions });
   } catch (e) {
