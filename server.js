@@ -623,11 +623,13 @@ app.get("/api/cached-results", async (req, res) => {
       runAutoScan().catch(() => {});
     }
   }
-  res.json({ results: cachedResults, lastScanTime, scanInProgress });
+  const priceSource = (!marketPricesLastUpdate || String(marketPricesLastUpdate).includes('fallback')) ? 'fallback' : 'pricecharting';
+  res.json({ results: cachedResults, lastScanTime, scanInProgress, priceSource });
 });
 
 app.get("/api/market-prices", (req, res) => {
-  res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate });
+  const priceSource = (!marketPricesLastUpdate || String(marketPricesLastUpdate).includes('fallback')) ? 'fallback' : 'pricecharting';
+  res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate, priceSource });
 });
 
 // ===== AUTO-SCAN =====
