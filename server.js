@@ -794,18 +794,17 @@ app.get("/api/market-prices", (req, res) => {
   });
 });
 
-// ===== ENDING AUCTIONS: auctions ending within 60 min =====
+// ===== ENDING AUCTIONS: any PSA 10 Pokemon auction ending within 60 min =====
 app.get("/api/ending-auctions", async (req, res) => {
   try {
-    const token = await getEbayToken();
     const allAuctions = [];
     const seenIds = new Set();
 
-    // Search for PSA 10 base set auctions, sorted by endingSoonest
-    const query = "psa 10 base set pokemon -shadowless -1st -bgs -cgc -pack -booster -celebrations -evolutions -reprint";
+    // Broad search: any PSA 10 Pokemon card auction
+    const query = '"psa 10" pokemon -bgs -cgc -sgc -pack -booster -lot -bundle -raw -ungraded';
     const filters = "price:[25..5000],priceCurrency:USD,buyingOptions:{AUCTION}";
     const pageSize = 200;
-    const maxPages = 3;
+    const maxPages = 5;
 
     for (let page = 0; page < maxPages; page++) {
       const offset = page * pageSize;
@@ -814,33 +813,47 @@ app.get("/api/ending-auctions", async (req, res) => {
         const items = result.itemSummaries || [];
         if (items.length === 0) break;
 
+        let pastWindow = false;
         for (const item of items) {
+          // Check end time first — since sorted by endingSoonest, once past 60m we're done
+          const endDate = item.itemEndDate ? new Date(item.itemEndDate) : null;
+          if (!endDate) continue;
+          const minutesLeft = (endDate - Date.now()) / 60000;
+          if (minutesLeft < 0) continue;
+          if (minutesLeft > 60) { pastWindow = true; break; }
+
           const itemId = item.itemId;
           if (!itemId || seenIds.has(itemId)) continue;
           const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
           if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
 
           const title = item.title || "";
-          const cardName = identifyCard(title);
-          if (!cardName) continue;
+          // Must actually say "PSA 10" in the title
+          if (!/psa\s*10/i.test(title)) continue;
+          // Exclude other graders
+          if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) continue;
 
           const price = extractPrice(item);
           if (price === null || price < 25 || price > 5000) continue;
 
-          // Check if auction ends within 60 minutes
-          const endDate = item.itemEndDate ? new Date(item.itemEndDate) : null;
-          if (!endDate) continue;
-          const minutesLeft = (endDate - Date.now()) / 60000;
-          if (minutesLeft < 0 || minutesLeft > 60) continue;
-
           const location = countryFromLocation(extractLocation(item));
           const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
 
-          // Look up market price from cached prices
+          // Extract a card name from title for display
+          let displayName = title
+            .replace(/psa\s*10/i, '').replace(/gem\s*mint/i, '')
+            .replace(/\d{4}\s*pokemon/i, 'Pokemon')
+            .replace(/\b(holo|holographic|rare|promo)\b/gi, '')
+            .replace(/[#\d]+\/\d+/g, '')
+            .replace(/\s+/g, ' ').trim();
+          if (displayName.length > 60) displayName = displayName.substring(0, 57) + '...';
+
+          // Try to match to base set for market price lookup
           let marketPrice = null;
           let pricechartingUrl = null;
-          if (cachedMarketPrices) {
-            const mp = cachedMarketPrices.find(c => c.name === cardName);
+          const baseCard = identifyCard(title);
+          if (baseCard && cachedMarketPrices) {
+            const mp = cachedMarketPrices.find(c => c.name === baseCard);
             if (mp) {
               marketPrice = mp.psa10Price;
               pricechartingUrl = mp.pricechartingUrl;
@@ -853,13 +866,14 @@ app.get("/api/ending-auctions", async (req, res) => {
 
           seenIds.add(itemId);
           allAuctions.push({
-            name: cardName, title, price, marketPrice, difference, pctOverMarket,
+            name: baseCard || displayName, title, price, marketPrice, difference, pctOverMarket,
             ebayUrl, pricechartingUrl, location, verified: !!marketPrice,
             endTime: endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
             minutesLeft: Math.round(minutesLeft),
           });
         }
 
+        if (pastWindow) break;
         const total = result.total || 0;
         if (offset + items.length >= total) break;
       } catch (err) {
@@ -868,11 +882,12 @@ app.get("/api/ending-auctions", async (req, res) => {
       }
     }
 
-    // Sort by biggest discount (most negative difference first)
+    // Sort: verified (has market price) first by biggest discount, then unverified by price
     allAuctions.sort((a, b) => {
-      if (a.difference == null) return 1;
-      if (b.difference == null) return -1;
-      return a.difference - b.difference;
+      if (a.difference != null && b.difference == null) return -1;
+      if (a.difference == null && b.difference != null) return 1;
+      if (a.difference != null && b.difference != null) return a.difference - b.difference;
+      return a.price - b.price;
     });
 
     res.json({ auctions: allAuctions });
