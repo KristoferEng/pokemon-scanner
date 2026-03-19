@@ -567,12 +567,38 @@ app.get("/api/scan-card", async (req, res) => {
   }
 });
 
-// ===== CACHED DATA =====
+// ===== CACHED DATA (persisted to disk) =====
+const fs = require("fs");
+const CACHE_FILE = path.join(__dirname, ".cache.json");
+
 let cachedResults = null;
 let lastScanTime = null;
 let scanInProgress = false;
 let cachedMarketPrices = null;
 let marketPricesLastUpdate = null;
+
+function saveCache() {
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({
+      cachedResults, lastScanTime, cachedMarketPrices, marketPricesLastUpdate,
+    }));
+  } catch (e) { console.error("[Cache] Save error:", e.message); }
+}
+
+function loadCache() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+      cachedResults = data.cachedResults || null;
+      lastScanTime = data.lastScanTime || null;
+      cachedMarketPrices = data.cachedMarketPrices || null;
+      marketPricesLastUpdate = data.marketPricesLastUpdate || null;
+      console.log("[Cache] Loaded from disk. LastScan:", lastScanTime);
+    }
+  } catch (e) { console.error("[Cache] Load error:", e.message); }
+}
+
+loadCache();
 
 // Register all API routes up front
 app.get("/api/cached-results", (req, res) => {
@@ -679,6 +705,7 @@ async function runAutoScan() {
       });
       cachedResults = { buyItNow, auctions };
       lastScanTime = new Date().toISOString();
+      saveCache();
     }
 
     // Cache results immediately WITHOUT prices so Deals tab shows data right away
@@ -777,6 +804,7 @@ async function fetchAllMarketPrices() {
 
   cachedMarketPrices = prices;
   marketPricesLastUpdate = new Date().toISOString();
+  saveCache();
   console.log(`[MarketPrices] Done. Cached ${prices.length} cards.`);
 }
 

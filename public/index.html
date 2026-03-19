@@ -324,6 +324,19 @@
           return;
         }
 
+        // Calculate total PSA 10 value
+        let totalPsa10 = 0;
+        let totalUngraded = 0;
+        let pricedCount = 0;
+        for (const card of data.prices) {
+          if (card.psa10Price) { totalPsa10 += card.psa10Price; pricedCount++; }
+          if (card.ungradedPrice) totalUngraded += card.ungradedPrice;
+        }
+        document.getElementById('marketLastUpdate').innerHTML =
+          (data.lastUpdate ? 'Last updated: ' + new Date(data.lastUpdate).toLocaleString() + '<br>' : '') +
+          '<strong>Total PSA 10 Set Value: $' + totalPsa10.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) +
+          '</strong> (' + pricedCount + '/102 priced) &nbsp;|&nbsp; Total Ungraded: $' + totalUngraded.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
         let html = '';
         for (const card of data.prices) {
           const typeBadge = card.type === 'Holo Rare' ? '<span class="badge badge-holo">Holo</span>'
