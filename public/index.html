@@ -107,8 +107,9 @@
 
     <!-- TAB 2: Ending Auctions -->
     <div class="tab-content" id="tab-auctions">
-      <button class="refresh-btn" onclick="loadEndingAuctions()">Refresh Ending Auctions</button>
-      <p class="subtitle">PSA 10 auctions ending in the next 60 minutes for Dragonite, Pikachu, Vulpix, Wigglytuff ($10-$1,000)</p>
+      <button class="refresh-btn" onclick="loadEndingAuctions(true)">Refresh Ending Auctions</button>
+      <p class="subtitle">PSA 10 auctions ending in the next 24 hours for Dragonite, Pikachu, Vulpix, Wigglytuff ($10-$1,000)</p>
+      <p class="subtitle" id="auctionLastUpdate" style="color:#fbbf24;"></p>
       <div id="endingAuctionsLoading" class="empty" style="display:none;">Loading ending auctions...</div>
       <table id="endingAuctionsTable">
         <thead>
@@ -258,19 +259,23 @@
     }
 
     // ===== ENDING AUCTIONS TAB =====
-    async function loadEndingAuctions() {
+    async function loadEndingAuctions(forceRefresh) {
       const tbody = document.querySelector('#endingAuctionsTable tbody');
       const loading = document.getElementById('endingAuctionsLoading');
       loading.style.display = 'block';
       tbody.innerHTML = '';
 
       try {
-        const resp = await fetch('/api/ending-auctions');
+        const resp = await fetch('/api/ending-auctions' + (forceRefresh ? '?refresh=1' : ''));
         const data = await resp.json();
         loading.style.display = 'none';
 
+        if (data.lastUpdate) {
+          document.getElementById('auctionLastUpdate').textContent = 'Last fetched: ' + new Date(data.lastUpdate).toLocaleString();
+        }
+
         if (!data.auctions || !data.auctions.length) {
-          tbody.innerHTML = '<tr><td colspan="10" class="empty">No auctions ending in the next 60 minutes</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10" class="empty">No PSA 10 auctions found in the next 24 hours</td></tr>';
           return;
         }
 
@@ -296,7 +301,7 @@
             <td>${mp}</td>
             <td>${savingsText}</td>
             <td class="${pctClass}">${pctText}</td>
-            <td class="${timeClass}">${item.minutesLeft}m</td>
+            <td class="${timeClass}">${item.timeLeftStr || item.minutesLeft + 'm'}</td>
             <td>${item.endTime} PT</td>
             <td>${item.location ? item.location.replace(/\b\w/g, c => c.toUpperCase()) : '—'}</td>
             <td><a href="${item.ebayUrl}" target="_blank">View</a></td>
