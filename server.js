@@ -582,8 +582,14 @@ let marketPricesLastUpdate = null;
 
 function saveCache() {
   try {
+    // Preserve last live PriceCharting prices separately for fallback on restart
+    const existing = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, "utf8")) : {};
+    const isLive = marketPricesLastUpdate && !String(marketPricesLastUpdate).includes('fallback');
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
       cachedResults, lastScanTime, cachedMarketPrices, marketPricesLastUpdate,
+      // Only update lastLive when we have a real PriceCharting fetch
+      lastLiveMarketPrices: isLive ? cachedMarketPrices : (existing.lastLiveMarketPrices || null),
+      lastLiveMarketPricesUpdate: isLive ? marketPricesLastUpdate : (existing.lastLiveMarketPricesUpdate || null),
     }));
   } catch (e) { console.error("[Cache] Save error:", e.message); }
 }
@@ -1126,11 +1132,27 @@ const PORT = process.env.PORT || 3456;
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // On deploy: always start with hardcoded fallback prices, then try live fetch
+  // On deploy: use last live PriceCharting prices from cache, or hardcoded fallback if none
   setTimeout(async () => {
-    console.log("[Startup] Loading fallback market prices...");
-    cachedMarketPrices = buildFallbackMarketPrices();
-    marketPricesLastUpdate = "2026-03-19T00:00:00Z (fallback)";
+    let lastLive = null;
+    let lastLiveUpdate = null;
+    try {
+      if (fs.existsSync(CACHE_FILE)) {
+        const cacheData = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
+        lastLive = cacheData.lastLiveMarketPrices;
+        lastLiveUpdate = cacheData.lastLiveMarketPricesUpdate;
+      }
+    } catch {}
+
+    if (lastLive && lastLive.length > 0) {
+      console.log(`[Startup] Using last live PriceCharting prices from ${lastLiveUpdate}`);
+      cachedMarketPrices = lastLive;
+      marketPricesLastUpdate = lastLiveUpdate;
+    } else {
+      console.log("[Startup] No live prices cached, using hardcoded fallback...");
+      cachedMarketPrices = buildFallbackMarketPrices();
+      marketPricesLastUpdate = "2026-03-19T00:00:00Z (fallback)";
+    }
     saveCache();
     // Run deals scan with whatever prices we have
     await runAutoScan();
