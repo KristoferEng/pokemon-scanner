@@ -890,14 +890,25 @@ gotReady.then(() => {
   server.keepAliveTimeout = 600000;
   server.headersTimeout = 600000;
 
-  // Run market prices first, then scan, then hourly
+  // Run deals scan immediately (fast via API), then market prices in background
   setTimeout(async () => {
-    await fetchAllMarketPrices();
     await runAutoScan();
-  }, 5000);
-  setInterval(async () => {
     await fetchAllMarketPrices();
-    await runAutoScan();
-  }, 60 * 60 * 1000);
+  }, 3000);
+
+  // Schedule on clock hours (1:00, 2:00, etc.)
+  function scheduleNextHour() {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(next.getHours() + 1, 0, 0, 0); // next :00
+    const msUntil = next - now;
+    console.log(`[Scheduler] Next scan at ${next.toISOString()} (in ${Math.round(msUntil/60000)}m)`);
+    setTimeout(async () => {
+      await runAutoScan();
+      await fetchAllMarketPrices();
+      scheduleNextHour();
+    }, msUntil);
+  }
+  scheduleNextHour();
 });
 process.stdin.resume();
