@@ -834,12 +834,12 @@ async function fetchAllMarketPrices() {
       const $pc = cheerio.load(pcHtml2);
 
       let psa10Price = null;
-      // Use average of last 5 comps from PSA 10 sold listings
+      // Use average of last 10 comps from PSA 10 sold listings
       const psa10Section = $pc('div.completed-auctions-manual-only');
       if (psa10Section.length) {
         const prices = [];
         psa10Section.find('tbody tr').each((i, row) => {
-          if (prices.length >= 5) return false;
+          if (prices.length >= 10) return false;
           const priceText = $pc(row).find('td.numeric .js-price').first().text();
           const match = priceText.match(/\$([\d,]+\.?\d*)/);
           if (match) prices.push(parseFloat(match[1].replace(/,/g, '')));
@@ -1385,6 +1385,7 @@ async function fetchPerfectOrder() {
           else if (/holo|foil/i.test(title) && !/reverse/i.test(title)) variant = 'H';
 
           const location = countryFromLocation(extractLocation(item));
+          if (!location || !/united states/i.test(location)) continue;
           const numericId = (item.itemId || '').replace(/v1\|/g, '').replace(/\|.*/g, '');
           const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
 
