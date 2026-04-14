@@ -148,13 +148,10 @@ function identifyCard(title) {
   if (/base\s*set\s*2|base\s*ii|base\s*2\b|celebrations|classic\s*collection|legendary\s*collection|evolutions|reprint|promo|world\s*championship/i.test(t)) return null;
   // Exclude Japanese/foreign
   if (/\b(japanese|japan|jpn|jp\b|korean|chinese|french|german|italian|spanish)\b/i.test(t)) return null;
-  // Exclude trainer cards and energy cards
-  if (/\b(doll|computer search|devolution spray|impostor|item finder|lass|pokemon breeder|pokemon trader|scoop up|super energy removal|defender|energy retrieval|full heal|maintenance|pluspower|pokemon center|pokemon flute|pokedex|professor oak|revive|super potion|bill|energy removal|gust of wind|potion|switch|double colorless|fighting energy|fire energy|grass energy|lightning energy|psychic energy|water energy)\b/i.test(t)) return null;
-
   const numMatch = t.match(/(?:#|no\.?\s*)?(\d{1,3})\s*\/\s*102/) || (t.includes('base set') && t.match(/(?:#|no\.?\s*)(\d{1,3})\b/));
   if (numMatch) {
     const num = parseInt(numMatch[1]);
-    if (num >= 1 && num <= 69) {
+    if (num >= 1 && num <= 102) {
       const card = BASE_SET_CARDS.find((c) => c.number === num);
       if (card) return card.name;
     }
@@ -162,7 +159,7 @@ function identifyCard(title) {
   }
 
   if (t.includes('base set')) {
-    const sorted = [...BASE_SET_CARDS].filter(c => c.number <= 69).sort((a, b) => b.name.length - a.name.length);
+    const sorted = [...BASE_SET_CARDS].sort((a, b) => b.name.length - a.name.length);
     for (const card of sorted) {
       if (t.includes(card.name.toLowerCase())) return card.name;
     }
@@ -1122,6 +1119,278 @@ app.get("/api/ending-auctions", async (req, res) => {
     console.error("[EndingAuctions] Error:", e);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ===== PIKACHU 57 (Surging Sparks) PSA 10 =====
+let cachedPikachu57 = null;
+let pikachu57LastUpdate = null;
+
+async function fetchPikachu57() {
+  console.log("[Pikachu57] Fetching...");
+  const allListings = [];
+  const seenIds = new Set();
+  const query = `pikachu surging sparks psa 10 -bgs -cgc -sgc -lot -bundle -raw -japanese -japan`;
+  const filters = "price:[10..5000],priceCurrency:USD";
+
+  for (let page = 0; page < 3; page++) {
+    try {
+      const result = await ebaySearch(query, "183454", 200, page * 200, filters, "newlyListed");
+      const items = result.itemSummaries || [];
+      if (!items.length) break;
+      for (const item of items) {
+        const itemId = item.itemId;
+        if (!itemId || seenIds.has(itemId)) continue;
+        const numericId = itemId.replace(/v1\|/g, '').replace(/\|.*/g, '');
+        if (BLOCKED_ITEMS.has(itemId) || BLOCKED_ITEMS.has(numericId)) continue;
+        const title = item.title || "";
+        const tl = title.toLowerCase();
+        if (!/psa\s*10/i.test(title)) continue;
+        if (!/pikachu/i.test(tl)) continue;
+        // Must have 57 or 057 reference
+        if (!/(^|[^0-9])0?57(\/|\s|$|[^0-9])/.test(tl)) continue;
+        // Must reference Surging Sparks (to exclude other Pikachu 057s like 151)
+        if (!/surg|spark|ssp/i.test(tl)) continue;
+        if (/\b(bgs|cgc|sgc|ace|ags|beckett|jpn|japanese|japan|korean|chinese|lot|bundle|pack|booster|sealed|raw|ungraded)\b/i.test(tl)) continue;
+        const price = extractPrice(item);
+        if (price === null) continue;
+        const isAuction = (item.buyingOptions || []).includes("AUCTION");
+        const location = countryFromLocation(extractLocation(item));
+        const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
+        seenIds.add(itemId);
+        allListings.push({ title, price, link: ebayUrl, isAuction, itemId, location });
+      }
+      if ((result.total || 0) <= (page + 1) * 200) break;
+    } catch (err) {
+      console.error(`[Pikachu57] API error page ${page + 1}:`, err.message);
+      break;
+    }
+  }
+
+  // PriceCharting lookup for Pikachu 57 Surging Sparks
+  let marketPrice = null;
+  let pricechartingUrl = "https://www.pricecharting.com/game/pokemon-surging-sparks/pikachu-57";
+  try {
+    const html = await fetchPage(pricechartingUrl);
+    const $ = cheerio.load(html);
+    const psa10Section = $('div.completed-auctions-manual-only');
+    if (psa10Section.length) {
+      const prices = [];
+      psa10Section.find('tbody tr').each((i, row) => {
+        if (prices.length >= 5) return false;
+        const priceText = $(row).find('td.numeric .js-price').first().text();
+        const m = priceText.match(/\$([\d,]+\.?\d*)/);
+        if (m) prices.push(parseFloat(m[1].replace(/,/g, '')));
+      });
+      if (prices.length) marketPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length * 100) / 100;
+    }
+    if (!marketPrice) {
+      const priceEl = $('#manual_only_price');
+      if (priceEl.length) {
+        const m = priceEl.text().match(/\$([\d,]+\.?\d*)/);
+        if (m) marketPrice = parseFloat(m[1].replace(/,/g, ''));
+      }
+    }
+  } catch (err) { console.error("[Pikachu57] PC error:", err.message); }
+
+  const buyItNow = [];
+  const auctions = [];
+  for (const l of allListings) {
+    const difference = marketPrice != null ? l.price - marketPrice : null;
+    const pctOverMarket = marketPrice != null && marketPrice > 0 ? ((l.price - marketPrice) / marketPrice) * 100 : null;
+    const item = { name: "Pikachu 57", title: l.title, price: l.price, marketPrice, difference, pctOverMarket,
+      ebayUrl: l.link, pricechartingUrl, verified: !!marketPrice, location: l.location };
+    if (l.isAuction) auctions.push(item); else buyItNow.push(item);
+  }
+  function countryOrder(loc) {
+    const x = (loc || '').toLowerCase();
+    if (x.includes('united states')) return 0;
+    if (x.includes('canada')) return 1;
+    if (x.includes('united kingdom')) return 2;
+    return 3;
+  }
+  const sortFn = (a, b) => {
+    const ca = countryOrder(a.location), cb = countryOrder(b.location);
+    if (ca !== cb) return ca - cb;
+    if (a.pctOverMarket == null) return 1;
+    if (b.pctOverMarket == null) return -1;
+    return a.pctOverMarket - b.pctOverMarket;
+  };
+  buyItNow.sort(sortFn); auctions.sort(sortFn);
+  cachedPikachu57 = { buyItNow, auctions, marketPrice, pricechartingUrl };
+  pikachu57LastUpdate = new Date().toISOString();
+  console.log(`[Pikachu57] Done. ${buyItNow.length} BIN, ${auctions.length} auctions. Market=${marketPrice}`);
+}
+
+app.get("/api/pikachu57", async (req, res) => {
+  const stale = !cachedPikachu57 || !pikachu57LastUpdate ||
+    (Date.now() - new Date(pikachu57LastUpdate).getTime()) > 60 * 60 * 1000;
+  if (stale) {
+    try { await fetchPikachu57(); } catch (e) { console.error(e); }
+  }
+  res.json({ ...(cachedPikachu57 || { buyItNow: [], auctions: [] }), lastUpdate: pikachu57LastUpdate });
+});
+
+// ===== PERFECT ORDER =====
+const PERFECT_ORDER_CARDS = [
+  {n:1,name:"Spinarak",v:"N"},{n:1,name:"Spinarak",v:"R"},{n:2,name:"Ariados",v:"N"},{n:2,name:"Ariados",v:"R"},
+  {n:3,name:"Shaymin",v:"N"},{n:3,name:"Shaymin",v:"R"},{n:4,name:"Snivy",v:"N"},{n:4,name:"Snivy",v:"R"},
+  {n:5,name:"Servine",v:"N"},{n:5,name:"Servine",v:"R"},{n:6,name:"Serperior",v:"H"},{n:6,name:"Serperior",v:"R"},
+  {n:7,name:"Scatterbug",v:"N"},{n:7,name:"Scatterbug",v:"R"},{n:8,name:"Spewpa",v:"N"},{n:8,name:"Spewpa",v:"R"},
+  {n:9,name:"Vivillon",v:"N"},{n:9,name:"Vivillon",v:"R"},{n:10,name:"Rowlet",v:"N"},{n:10,name:"Rowlet",v:"R"},
+  {n:11,name:"Dartrix",v:"N"},{n:11,name:"Dartrix",v:"R"},{n:12,name:"Decidueye ex",v:"H"},
+  {n:13,name:"Fletchinder",v:"N"},{n:13,name:"Fletchinder",v:"R"},{n:14,name:"Talonflame",v:"N"},{n:14,name:"Talonflame",v:"R"},
+  {n:15,name:"Salandit",v:"N"},{n:15,name:"Salandit",v:"R"},{n:16,name:"Salazzle ex",v:"H"},
+  {n:17,name:"Turtonator",v:"N"},{n:17,name:"Turtonator",v:"R"},{n:18,name:"Seel",v:"N"},{n:18,name:"Seel",v:"R"},
+  {n:19,name:"Dewgong",v:"H"},{n:19,name:"Dewgong",v:"R"},{n:20,name:"Staryu",v:"N"},{n:20,name:"Staryu",v:"R"},
+  {n:21,name:"Mega Starmie ex",v:"H"},{n:22,name:"Lapras ex",v:"H"},
+  {n:23,name:"Amaura",v:"N"},{n:23,name:"Amaura",v:"R"},{n:24,name:"Aurorus",v:"H"},{n:24,name:"Aurorus",v:"R"},
+  {n:25,name:"Volcanion",v:"N"},{n:25,name:"Volcanion",v:"R"},{n:26,name:"Shinx",v:"N"},{n:26,name:"Shinx",v:"R"},
+  {n:27,name:"Luxio",v:"N"},{n:27,name:"Luxio",v:"R"},{n:28,name:"Luxray",v:"H"},{n:28,name:"Luxray",v:"R"},
+  {n:29,name:"Dedenne",v:"N"},{n:29,name:"Dedenne",v:"R"},{n:30,name:"Clefairy",v:"N"},{n:30,name:"Clefairy",v:"R"},
+  {n:31,name:"Mega Clefable ex",v:"H"},{n:32,name:"Mawile",v:"N"},{n:32,name:"Mawile",v:"R"},
+  {n:33,name:"Espurr",v:"N"},{n:33,name:"Espurr",v:"R"},{n:34,name:"Meowstic",v:"N"},{n:34,name:"Meowstic",v:"R"},
+  {n:35,name:"Spritzee",v:"N"},{n:35,name:"Spritzee",v:"R"},{n:36,name:"Aromatisse",v:"N"},{n:36,name:"Aromatisse",v:"R"},
+  {n:37,name:"Nosepass",v:"N"},{n:37,name:"Nosepass",v:"R"},{n:38,name:"Probopass",v:"N"},{n:38,name:"Probopass",v:"R"},
+  {n:39,name:"Hippopotas",v:"N"},{n:39,name:"Hippopotas",v:"R"},{n:40,name:"Hippowdon",v:"N"},{n:40,name:"Hippowdon",v:"R"},
+  {n:41,name:"Landorus",v:"H"},{n:41,name:"Landorus",v:"R"},{n:42,name:"Binacle",v:"N"},{n:42,name:"Binacle",v:"R"},
+  {n:43,name:"Barbaracle",v:"N"},{n:43,name:"Barbaracle",v:"R"},{n:44,name:"Tyrunt",v:"N"},{n:44,name:"Tyrunt",v:"R"},
+  {n:45,name:"Tyrantrum",v:"H"},{n:45,name:"Tyrantrum",v:"R"},{n:46,name:"Hawlucha",v:"N"},{n:46,name:"Hawlucha",v:"R"},
+  {n:47,name:"Mega Zygarde ex",v:"H"},{n:48,name:"Gastly",v:"N"},{n:48,name:"Gastly",v:"R"},
+  {n:49,name:"Haunter",v:"N"},{n:49,name:"Haunter",v:"R"},{n:50,name:"Gengar",v:"H"},{n:50,name:"Gengar",v:"R"},
+  {n:51,name:"Skorupi",v:"N"},{n:51,name:"Skorupi",v:"R"},{n:52,name:"Drapion",v:"N"},{n:52,name:"Drapion",v:"R"},
+  {n:53,name:"Yveltal ex",v:"H"},{n:54,name:"Chien-Pao",v:"H"},{n:54,name:"Chien-Pao",v:"R"},
+  {n:55,name:"Mega Skarmory ex",v:"H"},{n:56,name:"Honedge",v:"N"},{n:56,name:"Honedge",v:"R"},
+  {n:57,name:"Doublade",v:"N"},{n:57,name:"Doublade",v:"R"},{n:58,name:"Aegislash",v:"N"},{n:58,name:"Aegislash",v:"R"},
+  {n:59,name:"Klefki",v:"N"},{n:59,name:"Klefki",v:"R"},{n:60,name:"Rattata",v:"N"},{n:60,name:"Rattata",v:"R"},
+  {n:61,name:"Raticate",v:"N"},{n:61,name:"Raticate",v:"R"},{n:62,name:"Meowth ex",v:"H"},
+  {n:63,name:"Snorlax",v:"N"},{n:63,name:"Snorlax",v:"R"},{n:64,name:"Bunnelby",v:"N"},{n:64,name:"Bunnelby",v:"R"},
+  {n:65,name:"Diggersby",v:"N"},{n:65,name:"Diggersby",v:"R"},{n:66,name:"Fletchling",v:"N"},{n:66,name:"Fletchling",v:"R"},
+  {n:67,name:"Furfrou",v:"N"},{n:67,name:"Furfrou",v:"R"},{n:68,name:"Antique Jaw Fossil",v:"N"},{n:68,name:"Antique Jaw Fossil",v:"R"},
+  {n:69,name:"Antique Sail Fossil",v:"N"},{n:69,name:"Antique Sail Fossil",v:"R"},
+  {n:70,name:"Core Memory",v:"N"},{n:70,name:"Core Memory",v:"R"},{n:71,name:"Crushing Hammer",v:"N"},{n:71,name:"Crushing Hammer",v:"R"},
+  {n:72,name:"Energy Search",v:"N"},{n:72,name:"Energy Search",v:"R"},{n:73,name:"Energy Swatter",v:"N"},{n:73,name:"Energy Swatter",v:"R"},
+  {n:74,name:"Hole-Digging Shovel",v:"N"},{n:74,name:"Hole-Digging Shovel",v:"R"},{n:75,name:"Jacinthe",v:"N"},{n:75,name:"Jacinthe",v:"R"},
+  {n:76,name:"Judge",v:"N"},{n:76,name:"Judge",v:"R"},{n:77,name:"Lumiose City",v:"N"},{n:77,name:"Lumiose City",v:"R"},
+  {n:78,name:"Lumiose Galette",v:"N"},{n:78,name:"Lumiose Galette",v:"R"},{n:79,name:"Naveen",v:"N"},{n:79,name:"Naveen",v:"R"},
+  {n:80,name:"Poke Ball",v:"N"},{n:80,name:"Poke Ball",v:"R"},{n:81,name:"Poke Pad",v:"N"},{n:81,name:"Poke Pad",v:"R"},
+  {n:82,name:"Pokemon Catcher",v:"N"},{n:82,name:"Pokemon Catcher",v:"R"},{n:83,name:"Potion",v:"N"},{n:83,name:"Potion",v:"R"},
+  {n:84,name:"Rosa's Encouragement",v:"N"},{n:84,name:"Rosa's Encouragement",v:"R"},{n:85,name:"Tarragon",v:"N"},{n:85,name:"Tarragon",v:"R"},
+  {n:86,name:"Growing Grass Energy",v:"H"},{n:86,name:"Growing Grass Energy",v:"R"},
+  {n:87,name:"Rocky Fighting Energy",v:"H"},{n:87,name:"Rocky Fighting Energy",v:"R"},
+  {n:88,name:"Telepathic Psychic Energy",v:"H"},{n:88,name:"Telepathic Psychic Energy",v:"R"},
+  {n:89,name:"Spewpa",v:"H"},{n:90,name:"Rowlet",v:"H"},{n:91,name:"Talonflame",v:"H"},{n:92,name:"Aurorus",v:"H"},
+  {n:93,name:"Dedenne",v:"H"},{n:94,name:"Clefairy",v:"H"},{n:95,name:"Espurr",v:"H"},{n:96,name:"Probopass",v:"H"},
+  {n:97,name:"Drapion",v:"H"},{n:98,name:"Doublade",v:"H"},{n:99,name:"Raticate",v:"H"},
+  {n:100,name:"Decidueye ex",v:"H"},{n:101,name:"Salazzle ex",v:"H"},{n:102,name:"Mega Starmie ex",v:"H"},
+  {n:103,name:"Mega Clefable ex",v:"H"},{n:104,name:"Mega Zygarde ex",v:"H"},{n:105,name:"Yveltal ex",v:"H"},
+  {n:106,name:"Mega Skarmory ex",v:"H"},{n:107,name:"Meowth ex",v:"H"},{n:108,name:"Energy Recycler",v:"H"},
+  {n:109,name:"Forest of Vitality",v:"H"},{n:110,name:"Jacinthe",v:"H"},{n:111,name:"Lumiose City",v:"H"},
+  {n:112,name:"Naveen",v:"H"},{n:113,name:"Poke Pad",v:"H"},{n:114,name:"Rosa's Encouragement",v:"H"},
+  {n:115,name:"Sacred Ash",v:"H"},{n:116,name:"Tarragon",v:"H"},{n:117,name:"Wondrous Patch",v:"H"},
+];
+
+function variantLabel(v) { return v === 'N' ? 'Normal' : v === 'R' ? 'Reverse Holo' : 'Holo'; }
+
+function extractShipping(item) {
+  const s = (item.shippingOptions && item.shippingOptions[0] && item.shippingOptions[0].shippingCost) || null;
+  if (!s || s.value == null) return 0;
+  return parseFloat(s.value) || 0;
+}
+
+let cachedPerfectOrder = null;
+let perfectOrderLastUpdate = null;
+let perfectOrderInProgress = false;
+
+async function fetchPerfectOrder() {
+  if (perfectOrderInProgress) return;
+  perfectOrderInProgress = true;
+  console.log("[PerfectOrder] Fetching...");
+  const results = [];
+  try {
+    // Group by unique card number to reduce queries; filter variant client-side from returned titles
+    const byNumber = new Map();
+    for (const c of PERFECT_ORDER_CARDS) {
+      if (!byNumber.has(c.n)) byNumber.set(c.n, []);
+      byNumber.get(c.n).push(c);
+    }
+
+    for (const [num, variants] of byNumber) {
+      const padded = String(num).padStart(3, '0');
+      const baseName = variants[0].name;
+      // Use set name + number for query
+      const query = `${baseName} ${padded}/088 perfect order -bgs -cgc -sgc -lot -bundle`;
+      const filters = "price:[0.01..5000],priceCurrency:USD,buyingOptions:{FIXED_PRICE}";
+
+      // For each variant, find cheapest BIN
+      const perVariantBest = { N: null, R: null, H: null };
+
+      try {
+        const result = await ebaySearch(query, "183454", 50, 0, filters, "price");
+        const items = result.itemSummaries || [];
+        for (const item of items) {
+          const title = (item.title || "").toLowerCase();
+          if (!title.includes(`${padded}/088`) && !title.includes(`${num}/088`)) continue;
+          if (!title.includes(baseName.toLowerCase().split(' ')[0])) continue;
+          if (/\b(jpn|japanese|japan|korean|chinese)\b/i.test(title)) continue;
+          if (/\b(lot|bundle|pack|booster|box|sealed|etb|proxy|custom)\b/i.test(title)) continue;
+
+          const price = extractPrice(item);
+          if (price == null) continue;
+          const shipping = extractShipping(item);
+          const total = price + shipping;
+
+          // classify variant
+          let variant = 'N';
+          if (/reverse\s*holo/i.test(title)) variant = 'R';
+          else if (/holo|foil/i.test(title) && !/reverse/i.test(title)) variant = 'H';
+
+          const location = countryFromLocation(extractLocation(item));
+          const numericId = (item.itemId || '').replace(/v1\|/g, '').replace(/\|.*/g, '');
+          const ebayUrl = item.itemWebUrl || `https://www.ebay.com/itm/${numericId}`;
+
+          const entry = { price, shipping, total, title: item.title, ebayUrl, location };
+          if (!perVariantBest[variant] || perVariantBest[variant].total > total) {
+            perVariantBest[variant] = entry;
+          }
+        }
+      } catch (err) {
+        console.error(`[PerfectOrder] API err for #${num}:`, err.message);
+      }
+
+      for (const c of variants) {
+        const best = perVariantBest[c.v];
+        results.push({
+          number: c.n, name: c.name, variant: variantLabel(c.v),
+          variantKey: c.v,
+          price: best ? best.total : null,
+          basePrice: best ? best.price : null,
+          shipping: best ? best.shipping : null,
+          ebayUrl: best ? best.ebayUrl : null,
+          location: best ? best.location : null,
+          title: best ? best.title : null,
+        });
+      }
+
+      await delay(150, 350);
+    }
+
+    cachedPerfectOrder = results;
+    perfectOrderLastUpdate = new Date().toISOString();
+    console.log(`[PerfectOrder] Done. ${results.length} rows, ${results.filter(r=>r.price).length} with listings.`);
+  } catch (e) {
+    console.error("[PerfectOrder] Error:", e);
+  } finally {
+    perfectOrderInProgress = false;
+  }
+}
+
+app.get("/api/perfect-order", async (req, res) => {
+  const stale = !cachedPerfectOrder || !perfectOrderLastUpdate ||
+    (Date.now() - new Date(perfectOrderLastUpdate).getTime()) > 6 * 60 * 60 * 1000;
+  if (stale && !perfectOrderInProgress) {
+    fetchPerfectOrder().catch(()=>{});
+  }
+  res.json({ cards: cachedPerfectOrder || [], lastUpdate: perfectOrderLastUpdate, inProgress: perfectOrderInProgress });
 });
 
 const PORT = process.env.PORT || 3456;

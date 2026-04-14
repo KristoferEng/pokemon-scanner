@@ -89,6 +89,8 @@
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('deals')">Deals</button>
       <button class="tab-btn" onclick="switchTab('market')">Market Prices</button>
+      <button class="tab-btn" onclick="switchTab('pikachu57')">Pikachu 57</button>
+      <button class="tab-btn" onclick="switchTab('perfectorder')">Perfect Order</button>
     </div>
 
     <!-- TAB 1: Deals (existing functionality) -->
@@ -120,7 +122,37 @@
       <p class="subtitle" id="marketLastUpdate"></p>
       <div class="table-wrap"><table id="marketTable">
         <thead>
-          <tr><th>#</th><th>Card</th><th>Type</th><th>PSA 10 Price</th><th>Ungraded Price</th><th>PriceCharting</th></tr>
+          <tr><th>Have</th><th>#</th><th>Card</th><th>Type</th><th>PSA 10 Price</th><th>Ungraded Price</th><th>PriceCharting</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <!-- TAB 3: Pikachu 57 -->
+    <div class="tab-content" id="tab-pikachu57">
+      <p class="subtitle" id="pikachu57LastUpdate"></p>
+      <h2>Buy It Now <span class="count-badge" id="pk57BinCount">0</span></h2>
+      <div class="table-wrap"><table id="pk57BinTable">
+        <thead>
+          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table></div>
+      <h2>Auctions <span class="count-badge" id="pk57AuctionCount">0</span></h2>
+      <div class="table-wrap"><table id="pk57AuctionTable">
+        <thead>
+          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <!-- TAB 4: Perfect Order -->
+    <div class="tab-content" id="tab-perfectorder">
+      <p class="subtitle" id="perfectOrderLastUpdate"></p>
+      <div class="table-wrap"><table id="perfectOrderTable">
+        <thead>
+          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Location</th><th>eBay</th></tr>
         </thead>
         <tbody></tbody>
       </table></div>
@@ -129,14 +161,32 @@
 
   <script>
     // Tab switching
+    const TABS = ['deals','market','pikachu57','perfectorder'];
     function switchTab(tab) {
       document.querySelectorAll('.tab-btn').forEach((b, i) => {
-        b.classList.toggle('active', ['deals','market'][i] === tab);
+        b.classList.toggle('active', TABS[i] === tab);
       });
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       document.getElementById('tab-' + tab).classList.add('active');
 
       if (tab === 'market') loadMarketPrices();
+      if (tab === 'pikachu57') loadPikachu57();
+      if (tab === 'perfectorder') loadPerfectOrder();
+    }
+
+    // ===== CHECKBOX PERSISTENCE =====
+    function getOwnedSet(key) {
+      try { return new Set(JSON.parse(localStorage.getItem(key) || '[]')); }
+      catch { return new Set(); }
+    }
+    function saveOwnedSet(key, set) {
+      localStorage.setItem(key, JSON.stringify([...set]));
+    }
+    function toggleOwned(key, id, rerender) {
+      const s = getOwnedSet(key);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      saveOwnedSet(key, s);
+      rerender();
     }
 
     function getTime() {
@@ -332,11 +382,13 @@
     }
 
     // ===== MARKET PRICES TAB =====
+    let _marketData = null;
     async function loadMarketPrices() {
       const tbody = document.querySelector('#marketTable tbody');
       try {
         const resp = await fetch('/api/market-prices');
         const data = await resp.json();
+        _marketData = data;
 
         if (data.lastUpdate) {
           const src = data.priceSource === 'fallback' ? ' (fallback prices)' : ' (live PriceCharting)';
@@ -362,31 +414,129 @@
           '<strong>Total PSA 10 Set Value: $' + totalPsa10.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) +
           '</strong> (' + pricedCount + '/102 priced) &nbsp;|&nbsp; Total Ungraded: $' + totalUngraded.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
-        let html = '';
-        for (const card of data.prices) {
-          const typeBadge = card.type === 'Holo Rare' ? '<span class="badge badge-holo">Holo</span>'
-            : card.type === 'Rare' ? '<span class="badge badge-rare">Rare</span>'
-            : card.type === 'Trainer' ? '<span class="badge badge-trainer">Trainer</span>'
-            : card.type === 'Energy' ? '<span class="badge badge-energy">Energy</span>'
-            : '<span class="badge badge-common">C/UC</span>';
-          const psa10 = card.psa10Price != null ? '$' + card.psa10Price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
-          const ungraded = card.ungradedPrice != null ? '$' + card.ungradedPrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
-          const pcLink = card.pricechartingUrl
-            ? `<a href="${card.pricechartingUrl}" target="_blank">View</a>` : 'N/A';
-
-          html += `<tr>
-            <td data-label="#">${card.number}</td>
-            <td data-label="Card">${card.name} ${typeBadge}</td>
-            <td data-label="Type">${card.type}</td>
-            <td data-label="PSA 10" class="price">${psa10}</td>
-            <td data-label="Ungraded">${ungraded}</td>
-            <td data-label="PC">${pcLink}</td>
-          </tr>`;
-        }
-        tbody.innerHTML = html;
+        renderMarketPrices();
       } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">Error: ' + e.message + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">Error: ' + e.message + '</td></tr>';
       }
+    }
+
+    function renderMarketPrices() {
+      const tbody = document.querySelector('#marketTable tbody');
+      if (!_marketData || !_marketData.prices) return;
+      const owned = getOwnedSet('owned_market');
+      const cards = _marketData.prices.slice().sort((a, b) => {
+        const ao = owned.has(a.number) ? 1 : 0;
+        const bo = owned.has(b.number) ? 1 : 0;
+        if (ao !== bo) return ao - bo;
+        return a.number - b.number;
+      });
+      let html = '';
+      for (const card of cards) {
+        const typeBadge = card.type === 'Holo Rare' ? '<span class="badge badge-holo">Holo</span>'
+          : card.type === 'Rare' ? '<span class="badge badge-rare">Rare</span>'
+          : card.type === 'Trainer' ? '<span class="badge badge-trainer">Trainer</span>'
+          : card.type === 'Energy' ? '<span class="badge badge-energy">Energy</span>'
+          : '<span class="badge badge-common">C/UC</span>';
+        const psa10 = card.psa10Price != null ? '$' + card.psa10Price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
+        const ungraded = card.ungradedPrice != null ? '$' + card.ungradedPrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
+        const pcLink = card.pricechartingUrl
+          ? `<a href="${card.pricechartingUrl}" target="_blank">View</a>` : 'N/A';
+        const checked = owned.has(card.number) ? 'checked' : '';
+        const rowStyle = owned.has(card.number) ? 'opacity:0.5;' : '';
+        html += `<tr style="${rowStyle}">
+          <td><input type="checkbox" ${checked} onchange="toggleOwned('owned_market', ${card.number}, renderMarketPrices)"></td>
+          <td data-label="#">${card.number}</td>
+          <td data-label="Card">${card.name} ${typeBadge}</td>
+          <td data-label="Type">${card.type}</td>
+          <td data-label="PSA 10" class="price">${psa10}</td>
+          <td data-label="Ungraded">${ungraded}</td>
+          <td data-label="PC">${pcLink}</td>
+        </tr>`;
+      }
+      tbody.innerHTML = html;
+    }
+
+    // ===== PIKACHU 57 TAB =====
+    async function loadPikachu57() {
+      const binBody = document.querySelector('#pk57BinTable tbody');
+      const aucBody = document.querySelector('#pk57AuctionTable tbody');
+      binBody.innerHTML = '<tr><td colspan="8" class="empty">Loading...</td></tr>';
+      aucBody.innerHTML = '';
+      try {
+        const resp = await fetch('/api/pikachu57');
+        const data = await resp.json();
+        if (data.lastUpdate) {
+          document.getElementById('pikachu57LastUpdate').textContent =
+            'Last updated: ' + new Date(data.lastUpdate).toLocaleString();
+        }
+        document.getElementById('pk57BinCount').textContent = (data.buyItNow || []).length;
+        document.getElementById('pk57AuctionCount').textContent = (data.auctions || []).length;
+        renderDealTable('#pk57BinTable tbody', data.buyItNow || []);
+        renderDealTable('#pk57AuctionTable tbody', data.auctions || []);
+      } catch (e) {
+        binBody.innerHTML = '<tr><td colspan="8" class="empty">Error: ' + e.message + '</td></tr>';
+      }
+    }
+
+    // ===== PERFECT ORDER TAB =====
+    let _perfectOrderData = null;
+    async function loadPerfectOrder() {
+      const tbody = document.querySelector('#perfectOrderTable tbody');
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">Loading... (first scan may take several minutes)</td></tr>';
+      try {
+        const resp = await fetch('/api/perfect-order');
+        const data = await resp.json();
+        _perfectOrderData = data;
+        if (data.lastUpdate) {
+          document.getElementById('perfectOrderLastUpdate').textContent =
+            'Last updated: ' + new Date(data.lastUpdate).toLocaleString() + (data.inProgress ? ' — refreshing...' : '');
+        } else if (data.inProgress) {
+          document.getElementById('perfectOrderLastUpdate').textContent = 'Scan in progress... refresh in a few minutes.';
+        }
+        renderPerfectOrder();
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">Error: ' + e.message + '</td></tr>';
+      }
+    }
+
+    function renderPerfectOrder() {
+      const tbody = document.querySelector('#perfectOrderTable tbody');
+      if (!_perfectOrderData || !_perfectOrderData.cards || !_perfectOrderData.cards.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No data yet. Scan in progress.</td></tr>';
+        return;
+      }
+      const owned = getOwnedSet('owned_perfect_order');
+      const rows = _perfectOrderData.cards.slice().sort((a, b) => {
+        const aid = `${a.number}|${a.variantKey}`;
+        const bid = `${b.number}|${b.variantKey}`;
+        const ao = owned.has(aid) ? 1 : 0;
+        const bo = owned.has(bid) ? 1 : 0;
+        if (ao !== bo) return ao - bo;
+        if (a.number !== b.number) return a.number - b.number;
+        return (a.variantKey || '').localeCompare(b.variantKey || '');
+      });
+      let html = '';
+      for (const c of rows) {
+        const id = `${c.number}|${c.variantKey}`;
+        const checked = owned.has(id) ? 'checked' : '';
+        const rowStyle = owned.has(id) ? 'opacity:0.5;' : '';
+        const priceText = c.price != null
+          ? `<span class="price">$${c.price.toFixed(2)}</span>` +
+            (c.shipping != null && c.shipping > 0 ? ` <span style="color:#64748b;font-size:0.75rem;">($${c.basePrice.toFixed(2)} + $${c.shipping.toFixed(2)} ship)</span>` : '')
+          : '<span style="color:#64748b;">N/A</span>';
+        const ebayCell = c.ebayUrl ? `<a href="${c.ebayUrl}" target="_blank">View</a>` : '—';
+        const loc = c.location ? (isMobile() ? shortLoc(c.location) : c.location.replace(/\b\w/g, ch => ch.toUpperCase())) : '—';
+        html += `<tr style="${rowStyle}">
+          <td><input type="checkbox" ${checked} onchange="toggleOwned('owned_perfect_order', '${id}', renderPerfectOrder)"></td>
+          <td>${c.number}</td>
+          <td>${c.name}</td>
+          <td>${c.variant}</td>
+          <td>${priceText}</td>
+          <td>${loc}</td>
+          <td>${ebayCell}</td>
+        </tr>`;
+      }
+      tbody.innerHTML = html;
     }
   </script>
 </body>
