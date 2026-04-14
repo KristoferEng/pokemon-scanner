@@ -89,8 +89,6 @@
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('deals')">Deals</button>
       <button class="tab-btn" onclick="switchTab('market')">Market Prices</button>
-      <button class="tab-btn" onclick="switchTab('pikachu57')">Pikachu 57</button>
-      <button class="tab-btn" onclick="switchTab('perfectorder')">Perfect Order</button>
     </div>
 
     <button id="goBtn" onclick="runActiveScan()">Run Live Scan</button>
@@ -127,40 +125,11 @@
       </table></div>
     </div>
 
-    <!-- TAB 3: Pikachu 57 -->
-    <div class="tab-content" id="tab-pikachu57">
-      <p class="subtitle" id="pikachu57LastUpdate"></p>
-      <h2>Buy It Now <span class="count-badge" id="pk57BinCount">0</span></h2>
-      <div class="table-wrap"><table id="pk57BinTable">
-        <thead>
-          <tr><th>Have</th><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table></div>
-      <h2>Auctions <span class="count-badge" id="pk57AuctionCount">0</span></h2>
-      <div class="table-wrap"><table id="pk57AuctionTable">
-        <thead>
-          <tr><th>Have</th><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table></div>
-    </div>
-
-    <!-- TAB 4: Perfect Order -->
-    <div class="tab-content" id="tab-perfectorder">
-      <p class="subtitle" id="perfectOrderLastUpdate"></p>
-      <div class="table-wrap"><table id="perfectOrderTable">
-        <thead>
-          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Market</th><th>Diff</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table></div>
-    </div>
   </div>
 
   <script>
     // Tab switching
-    const TABS = ['deals','market','pikachu57','perfectorder'];
+    const TABS = ['deals','market'];
     let activeTab = 'deals';
     function switchTab(tab) {
       activeTab = tab;
@@ -171,15 +140,11 @@
       document.getElementById('tab-' + tab).classList.add('active');
 
       if (tab === 'market') loadMarketPrices();
-      if (tab === 'pikachu57') loadPikachu57();
-      if (tab === 'perfectorder') loadPerfectOrder();
     }
 
     function runActiveScan() {
       if (activeTab === 'deals') return startScan();
       if (activeTab === 'market') return triggerTabScan('/api/trigger-market', '/api/market-prices', loadMarketPrices);
-      if (activeTab === 'pikachu57') return triggerTabScan('/api/trigger-pikachu57', '/api/pikachu57', loadPikachu57);
-      if (activeTab === 'perfectorder') return triggerTabScan('/api/trigger-perfect-order', '/api/perfect-order', loadPerfectOrder);
     }
 
     async function triggerTabScan(triggerUrl, statusUrl, reloader) {
@@ -514,102 +479,6 @@
       tbody.innerHTML = html;
     }
 
-    // ===== PIKACHU 57 TAB =====
-    async function loadPikachu57() {
-      const binBody = document.querySelector('#pk57BinTable tbody');
-      const aucBody = document.querySelector('#pk57AuctionTable tbody');
-      binBody.innerHTML = '<tr><td colspan="8" class="empty">Loading...</td></tr>';
-      aucBody.innerHTML = '';
-      try {
-        const resp = await fetch('/api/pikachu57');
-        const data = await resp.json();
-        if (data.lastUpdate) {
-          document.getElementById('pikachu57LastUpdate').textContent =
-            'Last updated: ' + new Date(data.lastUpdate).toLocaleString();
-        }
-        document.getElementById('pk57BinCount').textContent = (data.buyItNow || []).length;
-        document.getElementById('pk57AuctionCount').textContent = (data.auctions || []).length;
-        renderDealTable('#pk57BinTable tbody', data.buyItNow || []);
-        renderDealTable('#pk57AuctionTable tbody', data.auctions || []);
-      } catch (e) {
-        binBody.innerHTML = '<tr><td colspan="8" class="empty">Error: ' + e.message + '</td></tr>';
-      }
-    }
-
-    // ===== PERFECT ORDER TAB =====
-    let _perfectOrderData = null;
-    async function loadPerfectOrder() {
-      const tbody = document.querySelector('#perfectOrderTable tbody');
-      tbody.innerHTML = '<tr><td colspan="11" class="empty">Loading... (first scan may take several minutes)</td></tr>';
-      try {
-        const resp = await fetch('/api/perfect-order');
-        const data = await resp.json();
-        _perfectOrderData = data;
-        if (data.lastUpdate) {
-          document.getElementById('perfectOrderLastUpdate').textContent =
-            'Last updated: ' + new Date(data.lastUpdate).toLocaleString() + (data.inProgress ? ' — refreshing...' : '');
-        } else if (data.inProgress) {
-          document.getElementById('perfectOrderLastUpdate').textContent = 'Scan in progress... refresh in a few minutes.';
-        }
-        renderPerfectOrder();
-      } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">Error: ' + e.message + '</td></tr>';
-      }
-    }
-
-    function renderPerfectOrder() {
-      const tbody = document.querySelector('#perfectOrderTable tbody');
-      if (!_perfectOrderData || !_perfectOrderData.cards || !_perfectOrderData.cards.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">No data yet. Scan in progress.</td></tr>';
-        return;
-      }
-      const owned = getOwnedSet('owned_perfect_order');
-      const rows = _perfectOrderData.cards.slice().sort((a, b) => {
-        const aid = `${a.number}|${a.variantKey}`;
-        const bid = `${b.number}|${b.variantKey}`;
-        const ao = owned.has(aid) ? 1 : 0;
-        const bo = owned.has(bid) ? 1 : 0;
-        if (ao !== bo) return ao - bo;
-        if (a.number !== b.number) return a.number - b.number;
-        return (a.variantKey || '').localeCompare(b.variantKey || '');
-      });
-      let html = '';
-      for (const c of rows) {
-        const id = `${c.number}|${c.variantKey}`;
-        const checked = owned.has(id) ? 'checked' : '';
-        const rowStyle = owned.has(id) ? 'opacity:0.5;' : '';
-        const priceText = c.price != null
-          ? `<span class="price">$${c.price.toFixed(2)}</span>` +
-            (c.shipping != null && c.shipping > 0 ? ` <span style="color:#64748b;font-size:0.75rem;">($${c.basePrice.toFixed(2)} + $${c.shipping.toFixed(2)})</span>` : '')
-          : '<span style="color:#64748b;">N/A</span>';
-        const marketText = c.marketPrice != null ? '$' + c.marketPrice.toFixed(2) : 'N/A';
-        const diffClass = c.difference != null ? (c.difference < 0 ? 'negative' : 'positive') : '';
-        const diffText = c.difference != null
-          ? (c.difference < 0 ? '-$' + Math.abs(c.difference).toFixed(2) : '+$' + c.difference.toFixed(2))
-          : 'N/A';
-        const pctClass = c.pctOverMarket != null ? (c.pctOverMarket < 0 ? 'negative' : 'positive') : '';
-        const pctText = c.pctOverMarket != null
-          ? (c.pctOverMarket < 0 ? c.pctOverMarket.toFixed(1) + '%' : '+' + c.pctOverMarket.toFixed(1) + '%')
-          : 'N/A';
-        const ebayCell = c.ebayUrl ? `<a href="${c.ebayUrl}" target="_blank">View</a>` : '—';
-        const pcCell = c.pricechartingUrl ? `<a href="${c.pricechartingUrl}" target="_blank">View</a>` : '—';
-        const loc = c.location ? (isMobile() ? shortLoc(c.location) : c.location.replace(/\b\w/g, ch => ch.toUpperCase())) : '—';
-        html += `<tr style="${rowStyle}">
-          <td><input type="checkbox" ${checked} onchange="toggleOwned('owned_perfect_order', '${id}', renderPerfectOrder)"></td>
-          <td>${c.number}</td>
-          <td>${c.name}</td>
-          <td>${c.variant}</td>
-          <td>${priceText}</td>
-          <td>${marketText}</td>
-          <td class="${diffClass}">${diffText}</td>
-          <td class="${pctClass}">${pctText}</td>
-          <td>${loc}</td>
-          <td>${ebayCell}</td>
-          <td>${pcCell}</td>
-        </tr>`;
-      }
-      tbody.innerHTML = html;
-    }
   </script>
 </body>
 </html>
