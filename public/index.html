@@ -103,14 +103,14 @@
         <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
         <div class="table-wrap"><table id="binTable">
           <thead>
-            <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+            <tr><th>Have</th><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
           </thead>
           <tbody></tbody>
         </table></div>
         <h2>Auctions - Best Deals <span class="count-badge" id="auctionCount">0</span></h2>
         <div class="table-wrap"><table id="auctionTable">
           <thead>
-            <tr><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+            <tr><th>Have</th><th>Card</th><th>Current Bid</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
           </thead>
           <tbody></tbody>
         </table></div>
@@ -134,14 +134,14 @@
       <h2>Buy It Now <span class="count-badge" id="pk57BinCount">0</span></h2>
       <div class="table-wrap"><table id="pk57BinTable">
         <thead>
-          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>Have</th><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table></div>
       <h2>Auctions <span class="count-badge" id="pk57AuctionCount">0</span></h2>
       <div class="table-wrap"><table id="pk57AuctionTable">
         <thead>
-          <tr><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
+          <tr><th>Have</th><th>Card</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table></div>
@@ -288,14 +288,23 @@
       return loc.substring(0, 2).toUpperCase();
     }
 
+    const _dealTableCache = {};
     function renderDealTable(selector, items) {
+      if (items) _dealTableCache[selector] = items;
+      const cached = _dealTableCache[selector] || [];
       const tbody = document.querySelector(selector);
-      if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty">No items found</td></tr>';
+      if (!cached.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">No items found</td></tr>';
         return;
       }
+      const owned = getOwnedSet('owned_cards');
+      const sorted = cached.slice().sort((a, b) => {
+        const ao = owned.has(a.name) ? 1 : 0;
+        const bo = owned.has(b.name) ? 1 : 0;
+        return ao - bo;
+      });
       let html = '';
-      for (const item of items) {
+      for (const item of sorted) {
         const diffClass = item.difference != null ? (item.difference < 0 ? 'negative' : 'positive') : '';
         const diffText = item.difference != null
           ? (item.difference < 0 ? '-$' + Math.abs(item.difference).toFixed(2) : '+$' + item.difference.toFixed(2))
@@ -310,7 +319,12 @@
         const pctText = item.pctOverMarket != null
           ? (item.pctOverMarket < 0 ? item.pctOverMarket.toFixed(1) + '%' : '+' + item.pctOverMarket.toFixed(1) + '%')
           : 'N/A';
-        html += `<tr>
+        const isOwned = owned.has(item.name);
+        const checked = isOwned ? 'checked' : '';
+        const rowStyle = isOwned ? 'opacity:0.5;' : '';
+        const safeName = item.name.replace(/'/g, "\\'");
+        html += `<tr style="${rowStyle}">
+          <td><input type="checkbox" ${checked} onchange="toggleOwnedCard('${safeName}')"></td>
           <td data-label="Card">${item.name}${badge}</td>
           <td data-label="Price" class="price">$${item.price.toFixed(2)}</td>
           <td data-label="Market">${mp}</td>
@@ -322,6 +336,15 @@
         </tr>`;
       }
       tbody.innerHTML = html;
+    }
+
+    function toggleOwnedCard(name) {
+      const s = getOwnedSet('owned_cards');
+      if (s.has(name)) s.delete(name); else s.add(name);
+      saveOwnedSet('owned_cards', s);
+      // Re-render all deal tables and market prices
+      for (const sel of Object.keys(_dealTableCache)) renderDealTable(sel);
+      if (_marketData) renderMarketPrices();
     }
 
     // ===== ENDING AUCTIONS TAB =====
@@ -423,10 +446,10 @@
     function renderMarketPrices() {
       const tbody = document.querySelector('#marketTable tbody');
       if (!_marketData || !_marketData.prices) return;
-      const owned = getOwnedSet('owned_market');
+      const owned = getOwnedSet('owned_cards');
       const cards = _marketData.prices.slice().sort((a, b) => {
-        const ao = owned.has(a.number) ? 1 : 0;
-        const bo = owned.has(b.number) ? 1 : 0;
+        const ao = owned.has(a.name) ? 1 : 0;
+        const bo = owned.has(b.name) ? 1 : 0;
         if (ao !== bo) return ao - bo;
         return a.number - b.number;
       });
@@ -441,10 +464,11 @@
         const ungraded = card.ungradedPrice != null ? '$' + card.ungradedPrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : 'N/A';
         const pcLink = card.pricechartingUrl
           ? `<a href="${card.pricechartingUrl}" target="_blank">View</a>` : 'N/A';
-        const checked = owned.has(card.number) ? 'checked' : '';
-        const rowStyle = owned.has(card.number) ? 'opacity:0.5;' : '';
+        const checked = owned.has(card.name) ? 'checked' : '';
+        const rowStyle = owned.has(card.name) ? 'opacity:0.5;' : '';
+        const safeName = card.name.replace(/'/g, "\\'");
         html += `<tr style="${rowStyle}">
-          <td><input type="checkbox" ${checked} onchange="toggleOwned('owned_market', ${card.number}, renderMarketPrices)"></td>
+          <td><input type="checkbox" ${checked} onchange="toggleOwnedCard('${safeName}')"></td>
           <td data-label="#">${card.number}</td>
           <td data-label="Card">${card.name} ${typeBadge}</td>
           <td data-label="Type">${card.type}</td>
