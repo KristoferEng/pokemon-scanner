@@ -93,12 +93,11 @@
       <button class="tab-btn" onclick="switchTab('perfectorder')">Perfect Order</button>
     </div>
 
+    <button id="goBtn" onclick="runActiveScan()">Run Live Scan</button>
+    <div id="logContainer" style="display:none;"></div>
+
     <!-- TAB 1: Deals (existing functionality) -->
     <div class="tab-content active" id="tab-deals">
-      <button id="goBtn" onclick="startScan()">Run Live Scan</button>
-
-      <div id="logContainer" style="display:none;"></div>
-
       <div id="dealsResults">
         <h2>Buy It Now - Best Deals <span class="count-badge" id="binCount">0</span></h2>
         <div class="table-wrap"><table id="binTable">
@@ -162,7 +161,9 @@
   <script>
     // Tab switching
     const TABS = ['deals','market','pikachu57','perfectorder'];
+    let activeTab = 'deals';
     function switchTab(tab) {
+      activeTab = tab;
       document.querySelectorAll('.tab-btn').forEach((b, i) => {
         b.classList.toggle('active', TABS[i] === tab);
       });
@@ -172,6 +173,37 @@
       if (tab === 'market') loadMarketPrices();
       if (tab === 'pikachu57') loadPikachu57();
       if (tab === 'perfectorder') loadPerfectOrder();
+    }
+
+    function runActiveScan() {
+      if (activeTab === 'deals') return startScan();
+      if (activeTab === 'market') return triggerTabScan('/api/trigger-market', '/api/market-prices', loadMarketPrices);
+      if (activeTab === 'pikachu57') return triggerTabScan('/api/trigger-pikachu57', '/api/pikachu57', loadPikachu57);
+      if (activeTab === 'perfectorder') return triggerTabScan('/api/trigger-perfect-order', '/api/perfect-order', loadPerfectOrder);
+    }
+
+    async function triggerTabScan(triggerUrl, statusUrl, reloader) {
+      const btn = document.getElementById('goBtn');
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      try {
+        await fetch(triggerUrl, { method: 'POST' });
+        const poll = setInterval(async () => {
+          try {
+            const r = await fetch(statusUrl);
+            const d = await r.json();
+            if (!d.inProgress) {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.textContent = 'Run Live Scan';
+              reloader();
+            }
+          } catch {}
+        }, 5000);
+      } catch {
+        btn.disabled = false;
+        btn.textContent = 'Run Live Scan';
+      }
     }
 
     // ===== CHECKBOX PERSISTENCE =====
@@ -246,7 +278,7 @@
       try {
         const resp = await fetch('/api/cached-results');
         const data = await resp.json();
-        if (data.scanInProgress) {
+        if (data.scanInProgress && activeTab === 'deals') {
           const btn = document.getElementById('goBtn');
           btn.disabled = true;
           btn.textContent = 'Scanning...';
@@ -257,9 +289,11 @@
           const src = data.priceSource === 'fallback' ? ' (fallback prices)' : ' (live PriceCharting)';
           document.getElementById('lastScanInfo').textContent =
             'Last scan: ' + t.toLocaleString() + ' — auto-refreshes hourly' + src;
-          const btn = document.getElementById('goBtn');
-          btn.disabled = false;
-          btn.textContent = 'Run Live Scan';
+          if (activeTab === 'deals') {
+            const btn = document.getElementById('goBtn');
+            btn.disabled = false;
+            btn.textContent = 'Run Live Scan';
+          }
         }
         if (data.results) {
           document.getElementById('binCount').textContent = data.results.buyItNow.length;

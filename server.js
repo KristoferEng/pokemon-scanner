@@ -632,7 +632,30 @@ app.get("/api/cached-results", async (req, res) => {
 
 app.get("/api/market-prices", (req, res) => {
   const priceSource = (!marketPricesLastUpdate || String(marketPricesLastUpdate).includes('fallback')) ? 'fallback' : 'pricecharting';
-  res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate, priceSource });
+  res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate, priceSource, inProgress: marketPricesInProgress });
+});
+
+let marketPricesInProgress = false;
+let pikachu57InProgress = false;
+
+app.post("/api/trigger-market", (req, res) => {
+  if (marketPricesInProgress) return res.json({ status: "already_running" });
+  marketPricesInProgress = true;
+  fetchAllMarketPrices().catch(() => {}).finally(() => { marketPricesInProgress = false; });
+  res.json({ status: "started" });
+});
+
+app.post("/api/trigger-pikachu57", (req, res) => {
+  if (pikachu57InProgress) return res.json({ status: "already_running" });
+  pikachu57InProgress = true;
+  fetchPikachu57().catch(() => {}).finally(() => { pikachu57InProgress = false; });
+  res.json({ status: "started" });
+});
+
+app.post("/api/trigger-perfect-order", (req, res) => {
+  if (perfectOrderInProgress) return res.json({ status: "already_running" });
+  fetchPerfectOrder().catch(() => {});
+  res.json({ status: "started" });
 });
 
 // ===== AUTO-SCAN =====
@@ -1238,7 +1261,7 @@ app.get("/api/pikachu57", async (req, res) => {
   if (stale) {
     try { await fetchPikachu57(); } catch (e) { console.error(e); }
   }
-  res.json({ ...(cachedPikachu57 || { buyItNow: [], auctions: [] }), lastUpdate: pikachu57LastUpdate });
+  res.json({ ...(cachedPikachu57 || { buyItNow: [], auctions: [] }), lastUpdate: pikachu57LastUpdate, inProgress: pikachu57InProgress });
 });
 
 // ===== PERFECT ORDER =====
