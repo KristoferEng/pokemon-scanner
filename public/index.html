@@ -152,7 +152,7 @@
       <p class="subtitle" id="perfectOrderLastUpdate"></p>
       <div class="table-wrap"><table id="perfectOrderTable">
         <thead>
-          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Market</th><th>Diff</th><th>% Over Market</th><th>Location</th><th>eBay</th></tr>
+          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Market</th><th>Diff</th><th>% Over Market</th><th>Location</th><th>eBay</th><th>PriceCharting</th></tr>
         </thead>
         <tbody></tbody>
       </table></div>
@@ -506,7 +506,7 @@
     let _perfectOrderData = null;
     async function loadPerfectOrder() {
       const tbody = document.querySelector('#perfectOrderTable tbody');
-      tbody.innerHTML = '<tr><td colspan="10" class="empty">Loading... (first scan may take several minutes)</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" class="empty">Loading... (first scan may take several minutes)</td></tr>';
       try {
         const resp = await fetch('/api/perfect-order');
         const data = await resp.json();
@@ -558,6 +558,7 @@
           ? (c.pctOverMarket < 0 ? c.pctOverMarket.toFixed(1) + '%' : '+' + c.pctOverMarket.toFixed(1) + '%')
           : 'N/A';
         const ebayCell = c.ebayUrl ? `<a href="${c.ebayUrl}" target="_blank">View</a>` : '—';
+        const pcCell = c.pricechartingUrl ? `<a href="${c.pricechartingUrl}" target="_blank">View</a>` : '—';
         const loc = c.location ? (isMobile() ? shortLoc(c.location) : c.location.replace(/\b\w/g, ch => ch.toUpperCase())) : '—';
         html += `<tr style="${rowStyle}">
           <td><input type="checkbox" ${checked} onchange="toggleOwned('owned_perfect_order', '${id}', renderPerfectOrder)"></td>
@@ -570,6 +571,7 @@
           <td class="${pctClass}">${pctText}</td>
           <td>${loc}</td>
           <td>${ebayCell}</td>
+          <td>${pcCell}</td>
         </tr>`;
       }
       tbody.innerHTML = html;

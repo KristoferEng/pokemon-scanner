@@ -1381,6 +1381,8 @@ async function fetchPerfectOrder() {
         const difference = (listPrice != null && marketPrice != null) ? listPrice - marketPrice : null;
         const pctOverMarket = (listPrice != null && marketPrice != null && marketPrice > 0)
           ? ((listPrice - marketPrice) / marketPrice) * 100 : null;
+        const pcQuery = `perfect order ${c.name} ${c.n}`;
+        const pricechartingUrl = `https://www.pricecharting.com/search-products?q=${encodeURIComponent(pcQuery)}&type=prices`;
         results.push({
           number: c.n, name: c.name, variant: variantLabel(c.v),
           variantKey: c.v,
@@ -1388,6 +1390,7 @@ async function fetchPerfectOrder() {
           basePrice: best ? best.price : null,
           shipping: best ? best.shipping : null,
           marketPrice, difference, pctOverMarket,
+          pricechartingUrl,
           ebayUrl: best ? best.ebayUrl : null,
           location: best ? best.location : null,
           title: best ? best.title : null,
