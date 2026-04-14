@@ -770,6 +770,17 @@ const FALLBACK_PSA10 = {
   "Onix":104.21,"Pidgey":115,"Pikachu":421.72,"Poliwag":117.50,"Ponyta":99.99,
   "Rattata":86.30,"Sandshrew":125,"Squirtle":307.47,"Starmie":80.96,"Staryu":75.04,
   "Tangela":96,"Voltorb":161.24,"Vulpix":108.68,"Weedle":77,
+  "Clefairy Doll":352.19,"Computer Search":87.40,"Devolution Spray":514.94,
+  "Impostor Professor Oak":1200,"Item Finder":312.90,"Lass":123.13,
+  "Pokemon Breeder":329.41,"Pokemon Trader":281.21,"Scoop Up":224.12,
+  "Super Energy Removal":82.16,"Defender":479.79,"Energy Retrieval":139.50,
+  "Full Heal":632.83,"Maintenance":865.48,"PlusPower":125.54,
+  "Pokemon Center":612.19,"Pokemon Flute":551.21,"Pokedex":118.51,
+  "Professor Oak":122.99,"Revive":849,"Super Potion":63,"Bill":83.73,
+  "Energy Removal":68.50,"Gust of Wind":76.18,"Potion":72.48,"Switch":87.49,
+  "Double Colorless Energy":570.80,"Fighting Energy":80.89,"Fire Energy":74.88,
+  "Grass Energy":82.80,"Lightning Energy":91.50,"Psychic Energy":95.31,
+  "Water Energy":97.94,"Machamp":1500,
 };
 
 function buildFallbackMarketPrices() {
