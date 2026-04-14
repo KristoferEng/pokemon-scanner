@@ -152,7 +152,7 @@
       <p class="subtitle" id="perfectOrderLastUpdate"></p>
       <div class="table-wrap"><table id="perfectOrderTable">
         <thead>
-          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Location</th><th>eBay</th></tr>
+          <tr><th>Have</th><th>#</th><th>Card</th><th>Variant</th><th>Cheapest BIN (incl. ship)</th><th>Market</th><th>Diff</th><th>% Over Market</th><th>Location</th><th>eBay</th></tr>
         </thead>
         <tbody></tbody>
       </table></div>
@@ -397,7 +397,7 @@
         }
 
         if (!data.prices || !data.prices.length) {
-          tbody.innerHTML = '<tr><td colspan="6" class="empty">Market prices loading... check back in a few minutes.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">Market prices loading... check back in a few minutes.</td></tr>';
           return;
         }
 
@@ -482,7 +482,7 @@
     let _perfectOrderData = null;
     async function loadPerfectOrder() {
       const tbody = document.querySelector('#perfectOrderTable tbody');
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">Loading... (first scan may take several minutes)</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="empty">Loading... (first scan may take several minutes)</td></tr>';
       try {
         const resp = await fetch('/api/perfect-order');
         const data = await resp.json();
@@ -495,14 +495,14 @@
         }
         renderPerfectOrder();
       } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">Error: ' + e.message + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">Error: ' + e.message + '</td></tr>';
       }
     }
 
     function renderPerfectOrder() {
       const tbody = document.querySelector('#perfectOrderTable tbody');
       if (!_perfectOrderData || !_perfectOrderData.cards || !_perfectOrderData.cards.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">No data yet. Scan in progress.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No data yet. Scan in progress.</td></tr>';
         return;
       }
       const owned = getOwnedSet('owned_perfect_order');
@@ -522,8 +522,17 @@
         const rowStyle = owned.has(id) ? 'opacity:0.5;' : '';
         const priceText = c.price != null
           ? `<span class="price">$${c.price.toFixed(2)}</span>` +
-            (c.shipping != null && c.shipping > 0 ? ` <span style="color:#64748b;font-size:0.75rem;">($${c.basePrice.toFixed(2)} + $${c.shipping.toFixed(2)} ship)</span>` : '')
+            (c.shipping != null && c.shipping > 0 ? ` <span style="color:#64748b;font-size:0.75rem;">($${c.basePrice.toFixed(2)} + $${c.shipping.toFixed(2)})</span>` : '')
           : '<span style="color:#64748b;">N/A</span>';
+        const marketText = c.marketPrice != null ? '$' + c.marketPrice.toFixed(2) : 'N/A';
+        const diffClass = c.difference != null ? (c.difference < 0 ? 'negative' : 'positive') : '';
+        const diffText = c.difference != null
+          ? (c.difference < 0 ? '-$' + Math.abs(c.difference).toFixed(2) : '+$' + c.difference.toFixed(2))
+          : 'N/A';
+        const pctClass = c.pctOverMarket != null ? (c.pctOverMarket < 0 ? 'negative' : 'positive') : '';
+        const pctText = c.pctOverMarket != null
+          ? (c.pctOverMarket < 0 ? c.pctOverMarket.toFixed(1) + '%' : '+' + c.pctOverMarket.toFixed(1) + '%')
+          : 'N/A';
         const ebayCell = c.ebayUrl ? `<a href="${c.ebayUrl}" target="_blank">View</a>` : '—';
         const loc = c.location ? (isMobile() ? shortLoc(c.location) : c.location.replace(/\b\w/g, ch => ch.toUpperCase())) : '—';
         html += `<tr style="${rowStyle}">
@@ -532,6 +541,9 @@
           <td>${c.name}</td>
           <td>${c.variant}</td>
           <td>${priceText}</td>
+          <td>${marketText}</td>
+          <td class="${diffClass}">${diffText}</td>
+          <td class="${pctClass}">${pctText}</td>
           <td>${loc}</td>
           <td>${ebayCell}</td>
         </tr>`;
