@@ -1287,6 +1287,9 @@ const PERFECT_ORDER_CARDS = [
   {n:109,name:"Forest of Vitality",v:"H"},{n:110,name:"Jacinthe",v:"H"},{n:111,name:"Lumiose City",v:"H"},
   {n:112,name:"Naveen",v:"H"},{n:113,name:"Poke Pad",v:"H"},{n:114,name:"Rosa's Encouragement",v:"H"},
   {n:115,name:"Sacred Ash",v:"H"},{n:116,name:"Tarragon",v:"H"},{n:117,name:"Wondrous Patch",v:"H"},
+  {n:118,name:"Mega Starmie ex",v:"H"},{n:119,name:"Mega Clefable ex",v:"H"},{n:120,name:"Mega Zygarde ex",v:"H"},
+  {n:121,name:"Meowth ex",v:"H"},{n:122,name:"Jacinthe",v:"H"},{n:123,name:"Rosa's Encouragement",v:"H"},
+  {n:124,name:"Mega Zygarde ex",v:"H"},
 ];
 
 function variantLabel(v) { return v === 'N' ? 'Normal' : v === 'R' ? 'Reverse Holo' : 'Holo'; }
