@@ -89,6 +89,7 @@
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('deals')">Deals</button>
       <button class="tab-btn" onclick="switchTab('market')">Market Prices</button>
+      <button class="tab-btn" onclick="switchTab('collection')">Collection</button>
     </div>
 
     <button id="goBtn" onclick="runActiveScan()">Run Live Scan</button>
@@ -114,6 +115,11 @@
       </div>
     </div>
 
+    <!-- TAB 3: Collection -->
+    <div class="tab-content" id="tab-collection">
+      <div id="collectionContainer"></div>
+    </div>
+
     <!-- TAB 2: Market Prices -->
     <div class="tab-content" id="tab-market">
       <p class="subtitle" id="marketLastUpdate"></p>
@@ -129,7 +135,7 @@
 
   <script>
     // Tab switching
-    const TABS = ['deals','market'];
+    const TABS = ['deals','market','collection'];
     let activeTab = 'deals';
     function switchTab(tab) {
       activeTab = tab;
@@ -140,6 +146,7 @@
       document.getElementById('tab-' + tab).classList.add('active');
 
       if (tab === 'market') loadMarketPrices();
+      if (tab === 'collection') renderCollection();
     }
 
     function runActiveScan() {
@@ -477,6 +484,83 @@
         </tr>`;
       }
       tbody.innerHTML = html;
+    }
+
+    // ===== COLLECTION TAB =====
+    const COLLECTION = [
+      // Riley — Raw
+      { who: 'Riley', pokemon: 'Eevee', psa: 'Raw', cert: 'N/A', card: 'Prismatic Evolutions ETB', type: 'Promo', number: '173', pack: 'Scarlet & Violet', year: '2025', price: 12, cost: 10, pc: 'https://www.pricecharting.com/game/pokemon-promo/eevee-173' },
+      { who: 'Riley', pokemon: 'Decidueye', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '100', pack: 'Perfect Order', year: '2026', price: 6, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/decidueye-100' },
+      { who: 'Riley', pokemon: 'Talonflame', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '91', pack: 'Perfect Order', year: '2026', price: 8, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/talonflame-91' },
+      { who: 'Riley', pokemon: 'Mega Zygarde', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Holo', number: '47', pack: 'Perfect Order', year: '2026', price: 6, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/mega-zygarde-ex-47' },
+      { who: 'Riley', pokemon: 'Yveltal', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Double Rare', number: '53', pack: 'Perfect Order', year: '2026', price: 2, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/yveltal-ex-53' },
+      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '50', pack: 'Perfect Order', year: '2026', price: 3, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/gengar-50' },
+      { who: 'Riley', pokemon: 'Bulbasaur', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '133', pack: 'Mega Evolution', year: '2025', price: 20, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/bulbasaur-133#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Vulpix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '138', pack: 'Mega Evolution', year: '2025', price: 13, cost: 10, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/vulpix-138#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Indeedee', psa: 'Raw', cert: 'N/A', card: 'V', type: 'Full Art', number: 'SV114', pack: 'Shining Fates', year: '2021', price: 2, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-shining-fates/indeedee-v-sv114?q=indeedee+sv114' },
+      { who: 'Riley', pokemon: 'Steelix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '93', pack: 'Mega Evolution', year: '2025', price: 1, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/steelix-93' },
+      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Reverse Holo', number: '94', pack: 'Scarlet & Violet', year: '2023', price: 8, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/gengar-reverse-holo-94' },
+      // Riley — Graded
+      { who: 'Riley', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253407', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: null, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p' },
+
+      // Kenzie — Raw
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '72', pack: 'Sandstorm', year: '2026', price: 8, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-sandstorm/pikachu-72' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Ex', number: '33', pack: 'Japanese Super Electric Breaker', year: '2026', price: 4, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-japanese-super-electric-breaker/pikachu-ex-33' },
+      { who: 'Kenzie', pokemon: 'Ortega', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '219', pack: 'Obsidian Flames', year: '2023', price: 2, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-obsidian-flames/ortega-219?q=ortega+219#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Quaquaval', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Full Art', number: '325', pack: 'Japanese Shiny Treasure Ex', year: '2023', price: 3, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-japanese-shiny-treasure-ex/quaquaval-ex-325?q=quaquaval+ex+325' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '225', pack: 'World Championships', year: '2025', price: 6, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-promo/pikachu-world-championships-225' },
+      { who: 'Kenzie', pokemon: 'Magikarp', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '22', pack: 'Pokemon Generations', year: '2016', price: 10, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-generations/magikarp-toys-r-us-22?q=magikarp+toys' },
+      { who: 'Kenzie', pokemon: 'Chimchar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: 'DP02', pack: 'Promo', year: '2007', price: 6, cost: 6, pc: 'https://www.pricecharting.com/game/pokemon-promo/chimchar-dp02?q=chimchar+dp02' },
+      { who: 'Kenzie', pokemon: 'Ditto', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '197', pack: 'Japanese Vstar Universe', year: '2022', price: 5, cost: 5, pc: 'https://www.pricecharting.com/game/pokemon-japanese-vstar-universe/ditto-197?q=ditto+197' },
+      { who: 'Kenzie', pokemon: 'Giovanni', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '225', pack: 'Destined Rivals', year: '2025', price: 8, cost: 8, pc: 'https://www.pricecharting.com/game/pokemon-destined-rivals/team-rocket%27s-giovanni-225' },
+      { who: 'Kenzie', pokemon: 'Atticus', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '133', pack: 'Prismatic Evolutions', year: '2025', price: 2, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-prismatic-evolutions/atticus-133?q=atticus+133' },
+      // Kenzie — Graded
+      { who: 'Kenzie', pokemon: 'Mew', psa: '8', cert: '142390582', card: 'Pack', type: 'Pokemon', number: '11', pack: 'Pokemon Celebrations', year: '2021', price: null, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-celebrations/mew-11#completed-auctions-new' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253413', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: null, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p' },
+    ];
+
+    function money(v) {
+      return v == null ? '—' : '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function renderCollection() {
+      const container = document.getElementById('collectionContainer');
+      const owners = ['Riley', 'Kenzie'];
+      let html = '';
+      for (const owner of owners) {
+        const rows = COLLECTION.filter(c => c.who === owner);
+        const totalPrice = rows.reduce((s, r) => s + (r.price || 0), 0);
+        const totalCost = rows.reduce((s, r) => s + (r.cost || 0), 0);
+        html += `<h2>${owner} <span class="count-badge">${rows.length}</span></h2>`;
+        html += `<p class="subtitle" style="text-align:left;margin-bottom:10px;">
+          <strong>Total Price:</strong> ${money(totalPrice)} &nbsp;|&nbsp;
+          <strong>Total Cost:</strong> ${money(totalCost)} &nbsp;|&nbsp;
+          <strong>Profit:</strong> <span class="${totalPrice - totalCost >= 0 ? 'negative' : 'positive'}">${money(totalPrice - totalCost)}</span>
+        </p>`;
+        html += `<div class="table-wrap"><table>
+          <thead><tr>
+            <th>Pokemon</th><th>PSA</th><th>#</th><th>Card</th><th>Type</th>
+            <th>Number</th><th>Pack</th><th>Year</th><th>Price</th><th>Cost</th><th>PriceCharting</th>
+          </tr></thead><tbody>`;
+        for (const r of rows) {
+          const pcLink = r.pc ? `<a href="${r.pc}" target="_blank">View</a>` : '—';
+          html += `<tr>
+            <td>${r.pokemon}</td>
+            <td>${r.psa}</td>
+            <td>${r.cert}</td>
+            <td>${r.card}</td>
+            <td>${r.type}</td>
+            <td>${r.number}</td>
+            <td>${r.pack}</td>
+            <td>${r.year}</td>
+            <td class="price">${money(r.price)}</td>
+            <td>${money(r.cost)}</td>
+            <td>${pcLink}</td>
+          </tr>`;
+        }
+        html += `</tbody></table></div>`;
+      }
+      container.innerHTML = html;
     }
 
   </script>
