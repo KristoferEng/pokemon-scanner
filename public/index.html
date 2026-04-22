@@ -490,6 +490,13 @@
     // Price = average of last 5 completed auctions from PriceCharting
     // Raw cards use #completed-auctions-used; graded cards use #completed-auctions-graded
     const COLLECTION = [
+      // Chases
+      { who: 'Chases', pokemon: 'Vulpix', psa: '10', cert: 'N/A', card: 'Pack', type: 'IR', number: '138', pack: 'Mega Evolution', year: '2025', price: 72.98, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/vulpix-138#completed-auctions-manual-only' },
+      { who: 'Chases', pokemon: 'Dragonite', psa: '10', cert: 'N/A', card: 'Pack', type: 'Non-Holo', number: '19', pack: 'Fossil', year: '1999', price: 661.80, pc: 'https://www.pricecharting.com/game/pokemon-fossil/dragonite-19#completed-auctions-manual-only' },
+      { who: 'Chases', pokemon: 'Bulbasaur', psa: '10', cert: 'N/A', card: 'Pack', type: 'SIR', number: '166', pack: 'Scarlet & Violet 151', year: '2023', price: 325.99, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/bulbasaur-166#completed-auctions-manual-only' },
+      { who: 'Chases', pokemon: 'Charmander', psa: '10', cert: 'N/A', card: 'Pack', type: 'SIR', number: '168', pack: 'Scarlet & Violet 151', year: '2023', price: 690.11, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/charmander-168#completed-auctions-manual-only' },
+      { who: 'Chases', pokemon: 'Squirtle', psa: '10', cert: 'N/A', card: 'Pack', type: 'SIR', number: '170', pack: 'Scarlet & Violet 151', year: '2023', price: 446.73, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/squirtle-170#completed-auctions-manual-only' },
+
       // Riley — Raw
       { who: 'Riley', pokemon: 'Eevee', psa: 'Raw', cert: 'N/A', card: 'Prismatic Evolutions ETB', type: 'Promo', number: '173', pack: 'Scarlet & Violet', year: '2025', price: 11.89, pc: 'https://www.pricecharting.com/game/pokemon-promo/eevee-173#completed-auctions-used' },
       { who: 'Riley', pokemon: 'Decidueye', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '100', pack: 'Perfect Order', year: '2026', price: 3.53, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/decidueye-100#completed-auctions-used' },
@@ -527,7 +534,7 @@
 
     function renderCollection() {
       const container = document.getElementById('collectionContainer');
-      const owners = ['Riley', 'Kenzie'];
+      const owners = ['Chases', 'Riley', 'Kenzie'];
       let html = '';
       for (const owner of owners) {
         const rows = COLLECTION.filter(c => c.who === owner);
