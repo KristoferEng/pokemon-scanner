@@ -487,36 +487,38 @@
     }
 
     // ===== COLLECTION TAB =====
+    // Price = average of last 5 completed auctions from PriceCharting
+    // Raw cards use #completed-auctions-used; graded cards use #completed-auctions-graded
     const COLLECTION = [
       // Riley — Raw
-      { who: 'Riley', pokemon: 'Eevee', psa: 'Raw', cert: 'N/A', card: 'Prismatic Evolutions ETB', type: 'Promo', number: '173', pack: 'Scarlet & Violet', year: '2025', price: 12, cost: 10, pc: 'https://www.pricecharting.com/game/pokemon-promo/eevee-173' },
-      { who: 'Riley', pokemon: 'Decidueye', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '100', pack: 'Perfect Order', year: '2026', price: 6, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/decidueye-100' },
-      { who: 'Riley', pokemon: 'Talonflame', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '91', pack: 'Perfect Order', year: '2026', price: 8, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/talonflame-91' },
-      { who: 'Riley', pokemon: 'Mega Zygarde', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Holo', number: '47', pack: 'Perfect Order', year: '2026', price: 6, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/mega-zygarde-ex-47' },
-      { who: 'Riley', pokemon: 'Yveltal', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Double Rare', number: '53', pack: 'Perfect Order', year: '2026', price: 2, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/yveltal-ex-53' },
-      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '50', pack: 'Perfect Order', year: '2026', price: 3, cost: null, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/gengar-50' },
-      { who: 'Riley', pokemon: 'Bulbasaur', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '133', pack: 'Mega Evolution', year: '2025', price: 20, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/bulbasaur-133#completed-auctions-used' },
-      { who: 'Riley', pokemon: 'Vulpix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '138', pack: 'Mega Evolution', year: '2025', price: 13, cost: 10, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/vulpix-138#completed-auctions-used' },
-      { who: 'Riley', pokemon: 'Indeedee', psa: 'Raw', cert: 'N/A', card: 'V', type: 'Full Art', number: 'SV114', pack: 'Shining Fates', year: '2021', price: 2, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-shining-fates/indeedee-v-sv114?q=indeedee+sv114' },
-      { who: 'Riley', pokemon: 'Steelix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '93', pack: 'Mega Evolution', year: '2025', price: 1, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/steelix-93' },
-      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Reverse Holo', number: '94', pack: 'Scarlet & Violet', year: '2023', price: 8, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/gengar-reverse-holo-94' },
+      { who: 'Riley', pokemon: 'Eevee', psa: 'Raw', cert: 'N/A', card: 'Prismatic Evolutions ETB', type: 'Promo', number: '173', pack: 'Scarlet & Violet', year: '2025', price: 11.89, pc: 'https://www.pricecharting.com/game/pokemon-promo/eevee-173#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Decidueye', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '100', pack: 'Perfect Order', year: '2026', price: 3.53, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/decidueye-100#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Talonflame', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '91', pack: 'Perfect Order', year: '2026', price: 3.99, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/talonflame-91#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Mega Zygarde', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Holo', number: '47', pack: 'Perfect Order', year: '2026', price: 2.07, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/mega-zygarde-ex-47#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Yveltal', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Double Rare', number: '53', pack: 'Perfect Order', year: '2026', price: 2.23, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/yveltal-ex-53#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '50', pack: 'Perfect Order', year: '2026', price: 1.50, pc: 'https://www.pricecharting.com/game/pokemon-perfect-order/gengar-50#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Bulbasaur', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '133', pack: 'Mega Evolution', year: '2025', price: 28.92, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/bulbasaur-133#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Vulpix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'IR', number: '138', pack: 'Mega Evolution', year: '2025', price: 13.00, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/vulpix-138#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Indeedee', psa: 'Raw', cert: 'N/A', card: 'V', type: 'Full Art', number: 'SV114', pack: 'Shining Fates', year: '2021', price: 1.75, pc: 'https://www.pricecharting.com/game/pokemon-shining-fates/indeedee-v-sv114#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Steelix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '93', pack: 'Mega Evolution', year: '2025', price: 1.57, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/steelix-93#completed-auctions-used' },
+      { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Reverse Holo', number: '94', pack: 'Scarlet & Violet', year: '2023', price: 7.48, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/gengar-reverse-holo-94#completed-auctions-used' },
       // Riley — Graded
-      { who: 'Riley', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253407', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: null, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p' },
+      { who: 'Riley', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253407', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 29.10, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions-graded' },
 
       // Kenzie — Raw
-      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '72', pack: 'Sandstorm', year: '2026', price: 8, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-sandstorm/pikachu-72' },
-      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Ex', number: '33', pack: 'Japanese Super Electric Breaker', year: '2026', price: 4, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-japanese-super-electric-breaker/pikachu-ex-33' },
-      { who: 'Kenzie', pokemon: 'Ortega', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '219', pack: 'Obsidian Flames', year: '2023', price: 2, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-obsidian-flames/ortega-219?q=ortega+219#completed-auctions-used' },
-      { who: 'Kenzie', pokemon: 'Quaquaval', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Full Art', number: '325', pack: 'Japanese Shiny Treasure Ex', year: '2023', price: 3, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-japanese-shiny-treasure-ex/quaquaval-ex-325?q=quaquaval+ex+325' },
-      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '225', pack: 'World Championships', year: '2025', price: 6, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-promo/pikachu-world-championships-225' },
-      { who: 'Kenzie', pokemon: 'Magikarp', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '22', pack: 'Pokemon Generations', year: '2016', price: 10, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-generations/magikarp-toys-r-us-22?q=magikarp+toys' },
-      { who: 'Kenzie', pokemon: 'Chimchar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: 'DP02', pack: 'Promo', year: '2007', price: 6, cost: 6, pc: 'https://www.pricecharting.com/game/pokemon-promo/chimchar-dp02?q=chimchar+dp02' },
-      { who: 'Kenzie', pokemon: 'Ditto', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '197', pack: 'Japanese Vstar Universe', year: '2022', price: 5, cost: 5, pc: 'https://www.pricecharting.com/game/pokemon-japanese-vstar-universe/ditto-197?q=ditto+197' },
-      { who: 'Kenzie', pokemon: 'Giovanni', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '225', pack: 'Destined Rivals', year: '2025', price: 8, cost: 8, pc: 'https://www.pricecharting.com/game/pokemon-destined-rivals/team-rocket%27s-giovanni-225' },
-      { who: 'Kenzie', pokemon: 'Atticus', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '133', pack: 'Prismatic Evolutions', year: '2025', price: 2, cost: 2, pc: 'https://www.pricecharting.com/game/pokemon-prismatic-evolutions/atticus-133?q=atticus+133' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '72', pack: 'Sandstorm', year: '2026', price: 8.80, pc: 'https://www.pricecharting.com/game/pokemon-sandstorm/pikachu-72#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Ex', number: '33', pack: 'Japanese Super Electric Breaker', year: '2026', price: 3.43, pc: 'https://www.pricecharting.com/game/pokemon-japanese-super-electric-breaker/pikachu-ex-33#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Ortega', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '219', pack: 'Obsidian Flames', year: '2023', price: 2.25, pc: 'https://www.pricecharting.com/game/pokemon-obsidian-flames/ortega-219#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Quaquaval', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Full Art', number: '325', pack: 'Japanese Shiny Treasure Ex', year: '2023', price: 1.69, pc: 'https://www.pricecharting.com/game/pokemon-japanese-shiny-treasure-ex/quaquaval-ex-325#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '225', pack: 'World Championships', year: '2025', price: 7.38, pc: 'https://www.pricecharting.com/game/pokemon-promo/pikachu-world-championships-225#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Magikarp', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '22', pack: 'Pokemon Generations', year: '2016', price: 49.86, pc: 'https://www.pricecharting.com/game/pokemon-generations/magikarp-toys-r-us-22#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Chimchar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: 'DP02', pack: 'Promo', year: '2007', price: 8.72, pc: 'https://www.pricecharting.com/game/pokemon-promo/chimchar-dp02#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Ditto', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '197', pack: 'Japanese Vstar Universe', year: '2022', price: 7.16, pc: 'https://www.pricecharting.com/game/pokemon-japanese-vstar-universe/ditto-197#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Giovanni', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '225', pack: 'Destined Rivals', year: '2025', price: 10.08, pc: "https://www.pricecharting.com/game/pokemon-destined-rivals/team-rocket%27s-giovanni-225#completed-auctions-used" },
+      { who: 'Kenzie', pokemon: 'Atticus', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '133', pack: 'Prismatic Evolutions', year: '2025', price: 2.17, pc: 'https://www.pricecharting.com/game/pokemon-prismatic-evolutions/atticus-133#completed-auctions-used' },
       // Kenzie — Graded
-      { who: 'Kenzie', pokemon: 'Mew', psa: '8', cert: '142390582', card: 'Pack', type: 'Pokemon', number: '11', pack: 'Pokemon Celebrations', year: '2021', price: null, cost: 0, pc: 'https://www.pricecharting.com/game/pokemon-celebrations/mew-11#completed-auctions-new' },
-      { who: 'Kenzie', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253413', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: null, cost: 15, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p' },
+      { who: 'Kenzie', pokemon: 'Mew', psa: '8', cert: '142390582', card: 'Pack', type: 'Pokemon', number: '11', pack: 'Pokemon Celebrations', year: '2021', price: 23.60, pc: 'https://www.pricecharting.com/game/pokemon-celebrations/mew-11#completed-auctions-graded' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253413', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 29.10, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions-graded' },
     ];
 
     function money(v) {
@@ -530,17 +532,14 @@
       for (const owner of owners) {
         const rows = COLLECTION.filter(c => c.who === owner);
         const totalPrice = rows.reduce((s, r) => s + (r.price || 0), 0);
-        const totalCost = rows.reduce((s, r) => s + (r.cost || 0), 0);
         html += `<h2>${owner} <span class="count-badge">${rows.length}</span></h2>`;
         html += `<p class="subtitle" style="text-align:left;margin-bottom:10px;">
-          <strong>Total Price:</strong> ${money(totalPrice)} &nbsp;|&nbsp;
-          <strong>Total Cost:</strong> ${money(totalCost)} &nbsp;|&nbsp;
-          <strong>Profit:</strong> <span class="${totalPrice - totalCost >= 0 ? 'negative' : 'positive'}">${money(totalPrice - totalCost)}</span>
+          <strong>Total Value:</strong> ${money(totalPrice)}
         </p>`;
         html += `<div class="table-wrap"><table>
           <thead><tr>
             <th>Pokemon</th><th>PSA</th><th>#</th><th>Card</th><th>Type</th>
-            <th>Number</th><th>Pack</th><th>Year</th><th>Price</th><th>Cost</th><th>PriceCharting</th>
+            <th>Number</th><th>Pack</th><th>Year</th><th>Price</th><th>PriceCharting</th>
           </tr></thead><tbody>`;
         for (const r of rows) {
           const pcLink = r.pc ? `<a href="${r.pc}" target="_blank">View</a>` : '—';
@@ -554,7 +553,6 @@
             <td>${r.pack}</td>
             <td>${r.year}</td>
             <td class="price">${money(r.price)}</td>
-            <td>${money(r.cost)}</td>
             <td>${pcLink}</td>
           </tr>`;
         }
