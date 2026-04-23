@@ -576,6 +576,9 @@ let lastScanTime = null;
 let scanInProgress = false;
 let cachedMarketPrices = null;
 let marketPricesLastUpdate = null;
+let marketPricesInProgress = false;
+let cachedCollectionPrices = {};
+let collectionPricesInProgress = false;
 
 function saveCache() {
   try {
@@ -584,6 +587,7 @@ function saveCache() {
     const isLive = marketPricesLastUpdate && !String(marketPricesLastUpdate).includes('fallback');
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
       cachedResults, lastScanTime, cachedMarketPrices, marketPricesLastUpdate,
+      cachedCollectionPrices,
       // Only update lastLive when we have a real PriceCharting fetch
       lastLiveMarketPrices: isLive ? cachedMarketPrices : (existing.lastLiveMarketPrices || null),
       lastLiveMarketPricesUpdate: isLive ? marketPricesLastUpdate : (existing.lastLiveMarketPricesUpdate || null),
@@ -599,6 +603,7 @@ function loadCache() {
       lastScanTime = data.lastScanTime || null;
       cachedMarketPrices = data.cachedMarketPrices || null;
       marketPricesLastUpdate = data.marketPricesLastUpdate || null;
+      cachedCollectionPrices = data.cachedCollectionPrices || {};
       console.log("[Cache] Loaded from disk. LastScan:", lastScanTime);
     }
   } catch (e) { console.error("[Cache] Load error:", e.message); }
@@ -608,10 +613,18 @@ loadCache();
 
 // Register all API routes up front
 app.post("/api/trigger-scan", (req, res) => {
-  if (scanInProgress) {
+  if (scanInProgress || marketPricesInProgress) {
     return res.json({ status: "already_running" });
   }
-  runAutoScan().catch(() => {});
+  scanInProgress = true;
+  (async () => {
+    try {
+      marketPricesInProgress = true;
+      await fetchAllMarketPrices();
+    } catch (e) { console.error("[TriggerScan] market refresh error:", e.message); }
+    finally { marketPricesInProgress = false; }
+    await runAutoScan({ force: true });
+  })().catch((e) => { console.error("[TriggerScan]", e); scanInProgress = false; marketPricesInProgress = false; });
   res.json({ status: "started" });
 });
 
@@ -635,8 +648,6 @@ app.get("/api/market-prices", (req, res) => {
   res.json({ prices: cachedMarketPrices, lastUpdate: marketPricesLastUpdate, priceSource, inProgress: marketPricesInProgress });
 });
 
-let marketPricesInProgress = false;
-
 app.post("/api/trigger-market", (req, res) => {
   if (marketPricesInProgress) return res.json({ status: "already_running" });
   marketPricesInProgress = true;
@@ -644,10 +655,63 @@ app.post("/api/trigger-market", (req, res) => {
   res.json({ status: "started" });
 });
 
+app.post("/api/trigger-collection", (req, res) => {
+  if (collectionPricesInProgress) return res.json({ status: "already_running" });
+  const items = (req.body && Array.isArray(req.body.items)) ? req.body.items : [];
+  if (!items.length) return res.json({ status: "no_items" });
+  collectionPricesInProgress = true;
+  fetchCollectionPrices(items)
+    .catch((e) => console.error("[CollectionPrices]", e))
+    .finally(() => { collectionPricesInProgress = false; saveCache(); });
+  res.json({ status: "started", count: items.length });
+});
+
+app.get("/api/collection-prices", (req, res) => {
+  res.json({ prices: cachedCollectionPrices, inProgress: collectionPricesInProgress });
+});
+
+async function fetchCollectionPrices(items) {
+  console.log(`[CollectionPrices] Scraping ${items.length} items...`);
+  for (const item of items) {
+    const pcUrl = item.pc;
+    if (!pcUrl) continue;
+    try {
+      const fragMatch = pcUrl.match(/#completed-auctions(?:-([\w-]+))?/);
+      const suffix = item.section || (fragMatch && fragMatch[1]) || 'used';
+      const html = await fetchPage(pcUrl);
+      const $ = cheerio.load(html);
+      const section = $(`div.completed-auctions-${suffix}`);
+      const comps = [];
+      section.find('tbody tr').each((i, row) => {
+        if (comps.length >= 5) return false;
+        const priceText = $(row).find('td.numeric .js-price').first().text();
+        const m = priceText.match(/\$([\d,]+\.?\d*)/);
+        if (m) comps.push(parseFloat(m[1].replace(/,/g, '')));
+      });
+      if (comps.length > 0) {
+        let avg = comps.reduce((a, b) => a + b, 0) / comps.length;
+        if (typeof item.discountPct === 'number' && item.discountPct > 0 && item.discountPct < 1) {
+          avg = avg * (1 - item.discountPct);
+        }
+        const price = Math.round(avg * 100) / 100;
+        cachedCollectionPrices[pcUrl] = { price, compCount: comps.length, section: suffix, lastUpdate: new Date().toISOString() };
+        console.log(`[CollectionPrices] ${pcUrl.split('/').pop()} (${suffix}): $${price} from ${comps.length} comps`);
+      } else {
+        cachedCollectionPrices[pcUrl] = { price: null, compCount: 0, section: suffix, lastUpdate: new Date().toISOString() };
+        console.log(`[CollectionPrices] ${pcUrl.split('/').pop()} (${suffix}): no comps found`);
+      }
+    } catch (e) {
+      console.error(`[CollectionPrices] Error for ${pcUrl}:`, e.message);
+    }
+    await delay(1000, 2000);
+  }
+  console.log(`[CollectionPrices] Done.`);
+}
+
 // ===== AUTO-SCAN =====
 
-async function runAutoScan() {
-  if (scanInProgress) return;
+async function runAutoScan(opts = {}) {
+  if (!opts.force && scanInProgress) return;
   scanInProgress = true;
   console.log(`[AutoScan] Starting at ${new Date().toISOString()}`);
 
@@ -822,12 +886,12 @@ async function fetchAllMarketPrices() {
       const $pc = cheerio.load(pcHtml2);
 
       let psa10Price = null;
-      // Use average of last 10 comps from PSA 10 sold listings
+      // Use average of last 5 comps from PSA 10 sold listings
       const psa10Section = $pc('div.completed-auctions-manual-only');
       if (psa10Section.length) {
         const prices = [];
         psa10Section.find('tbody tr').each((i, row) => {
-          if (prices.length >= 10) return false;
+          if (prices.length >= 5) return false;
           const priceText = $pc(row).find('td.numeric .js-price').first().text();
           const match = priceText.match(/\$([\d,]+\.?\d*)/);
           if (match) prices.push(parseFloat(match[1].replace(/,/g, '')));

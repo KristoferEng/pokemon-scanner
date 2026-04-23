@@ -87,9 +87,9 @@
     <p class="subtitle" id="lastScanInfo" style="color:#fbbf24;"></p>
 
     <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('deals')">Deals</button>
+      <button class="tab-btn active" onclick="switchTab('deals')">Base Set</button>
       <button class="tab-btn" onclick="switchTab('market')">Market Prices</button>
-      <button class="tab-btn" onclick="switchTab('collection')">Collection</button>
+      <button class="tab-btn" onclick="switchTab('collection')">Chase/Trade</button>
     </div>
 
     <button id="goBtn" onclick="runActiveScan()">Run Live Scan</button>
@@ -146,12 +146,13 @@
       document.getElementById('tab-' + tab).classList.add('active');
 
       if (tab === 'market') loadMarketPrices();
-      if (tab === 'collection') renderCollection();
+      if (tab === 'collection') loadCollectionPrices().then(renderCollection);
     }
 
     function runActiveScan() {
       if (activeTab === 'deals') return startScan();
       if (activeTab === 'market') return triggerTabScan('/api/trigger-market', '/api/market-prices', loadMarketPrices);
+      if (activeTab === 'collection') return runCollectionScan();
     }
 
     async function triggerTabScan(triggerUrl, statusUrl, reloader) {
@@ -510,7 +511,7 @@
       { who: 'Riley', pokemon: 'Steelix', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Holo', number: '93', pack: 'Mega Evolution', year: '2025', price: 1.57, pc: 'https://www.pricecharting.com/game/pokemon-mega-evolution/steelix-93#completed-auctions-used' },
       { who: 'Riley', pokemon: 'Gengar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Reverse Holo', number: '94', pack: 'Scarlet & Violet', year: '2023', price: 7.48, pc: 'https://www.pricecharting.com/game/pokemon-scarlet-&-violet-151/gengar-reverse-holo-94#completed-auctions-used' },
       // Riley — Graded
-      { who: 'Riley', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253407', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 46.31, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions' },
+      { who: 'Riley', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253407', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 46.31, section: 'box-only', pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions' },
 
       // Kenzie — Raw
       { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '72', pack: 'Sandstorm', year: '2026', price: 8.80, pc: 'https://www.pricecharting.com/game/pokemon-sandstorm/pikachu-72#completed-auctions-used' },
@@ -518,18 +519,66 @@
       { who: 'Kenzie', pokemon: 'Ortega', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '219', pack: 'Obsidian Flames', year: '2023', price: 2.25, pc: 'https://www.pricecharting.com/game/pokemon-obsidian-flames/ortega-219#completed-auctions-used' },
       { who: 'Kenzie', pokemon: 'Quaquaval', psa: 'Raw', cert: 'N/A', card: 'Ex', type: 'Full Art', number: '325', pack: 'Japanese Shiny Treasure Ex', year: '2023', price: 1.69, pc: 'https://www.pricecharting.com/game/pokemon-japanese-shiny-treasure-ex/quaquaval-ex-325#completed-auctions-used' },
       { who: 'Kenzie', pokemon: 'Pikachu', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '225', pack: 'World Championships', year: '2025', price: 7.38, pc: 'https://www.pricecharting.com/game/pokemon-promo/pikachu-world-championships-225#completed-auctions-used' },
-      { who: 'Kenzie', pokemon: 'Magikarp', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '22', pack: 'Pokemon Generations', year: '2016', price: 14.96, note: 'rough corner, 70% off $49.86', pc: 'https://www.pricecharting.com/game/pokemon-generations/magikarp-toys-r-us-22#completed-auctions-used' },
+      { who: 'Kenzie', pokemon: 'Magikarp', psa: 'Raw', cert: 'N/A', card: 'Promo', type: 'Promo', number: '22', pack: 'Pokemon Generations', year: '2016', price: 14.96, discountPct: 0.7, note: 'rough corner, 70% off', pc: 'https://www.pricecharting.com/game/pokemon-generations/magikarp-toys-r-us-22#completed-auctions-used' },
       { who: 'Kenzie', pokemon: 'Chimchar', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: 'DP02', pack: 'Promo', year: '2007', price: 8.72, pc: 'https://www.pricecharting.com/game/pokemon-promo/chimchar-dp02#completed-auctions-used' },
       { who: 'Kenzie', pokemon: 'Ditto', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '197', pack: 'Japanese Vstar Universe', year: '2022', price: 7.16, pc: 'https://www.pricecharting.com/game/pokemon-japanese-vstar-universe/ditto-197#completed-auctions-used' },
       { who: 'Kenzie', pokemon: 'Giovanni', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Common', number: '225', pack: 'Destined Rivals', year: '2025', price: 10.08, pc: "https://www.pricecharting.com/game/pokemon-destined-rivals/team-rocket%27s-giovanni-225#completed-auctions-used" },
       { who: 'Kenzie', pokemon: 'Atticus', psa: 'Raw', cert: 'N/A', card: 'Pack', type: 'Trainer', number: '133', pack: 'Prismatic Evolutions', year: '2025', price: 2.17, pc: 'https://www.pricecharting.com/game/pokemon-prismatic-evolutions/atticus-133#completed-auctions-used' },
       // Kenzie — Graded
       { who: 'Kenzie', pokemon: 'Mew', psa: '8', cert: '142390582', card: 'Pack', type: 'Pokemon', number: '11', pack: 'Pokemon Celebrations', year: '2021', price: 11.22, pc: 'https://www.pricecharting.com/game/pokemon-celebrations/mew-11#completed-auctions-new' },
-      { who: 'Kenzie', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253413', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 46.31, pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions' },
+      { who: 'Kenzie', pokemon: 'Pikachu', psa: '9.5 (Beckett)', cert: '19253413', card: 'Japanese', type: 'Promo', number: '20/M-P', pack: 'McDonalds', year: '2025', price: 46.31, section: 'box-only', pc: 'https://www.pricecharting.com/game/pokemon-japanese-promo/pikachu-20m-p#completed-auctions' },
     ];
 
     function money(v) {
       return v == null ? '—' : '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    let _collectionPrices = {};
+
+    async function loadCollectionPrices() {
+      try {
+        const r = await fetch('/api/collection-prices');
+        const d = await r.json();
+        _collectionPrices = d.prices || {};
+      } catch {}
+    }
+
+    function effectivePrice(r) {
+      const scraped = _collectionPrices[r.pc];
+      if (scraped && typeof scraped.price === 'number') return scraped.price;
+      return r.price;
+    }
+
+    async function runCollectionScan() {
+      const btn = document.getElementById('goBtn');
+      btn.disabled = true;
+      btn.textContent = 'Scanning...';
+      try {
+        const items = COLLECTION
+          .filter(r => r.pc)
+          .map(r => ({ pc: r.pc, section: r.section, discountPct: r.discountPct }));
+        await fetch('/api/trigger-collection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+        });
+        const poll = setInterval(async () => {
+          try {
+            const r = await fetch('/api/collection-prices');
+            const d = await r.json();
+            _collectionPrices = d.prices || {};
+            renderCollection();
+            if (!d.inProgress) {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.textContent = 'Run Live Scan';
+            }
+          } catch {}
+        }, 5000);
+      } catch {
+        btn.disabled = false;
+        btn.textContent = 'Run Live Scan';
+      }
     }
 
     function renderCollection() {
@@ -538,7 +587,7 @@
       let html = '';
       for (const owner of owners) {
         const rows = COLLECTION.filter(c => c.who === owner);
-        const totalPrice = rows.reduce((s, r) => s + (r.price || 0), 0);
+        const totalPrice = rows.reduce((s, r) => s + (effectivePrice(r) || 0), 0);
         html += `<h2>${owner} <span class="count-badge">${rows.length}</span></h2>`;
         html += `<p class="subtitle" style="text-align:left;margin-bottom:10px;">
           <strong>Total Value:</strong> ${money(totalPrice)}
@@ -550,6 +599,11 @@
           </tr></thead><tbody>`;
         for (const r of rows) {
           const pcLink = r.pc ? `<a href="${r.pc}" target="_blank">View</a>` : '—';
+          const scraped = _collectionPrices[r.pc];
+          const price = effectivePrice(r);
+          const compInfo = scraped && scraped.compCount
+            ? ` <span style="color:#64748b;font-size:0.7rem;font-weight:400;">(${scraped.compCount} comps)</span>`
+            : '';
           html += `<tr>
             <td>${r.pokemon}</td>
             <td>${r.psa}</td>
@@ -559,7 +613,7 @@
             <td>${r.number}</td>
             <td>${r.pack}</td>
             <td>${r.year}</td>
-            <td class="price">${money(r.price)}${r.note ? ` <span style="color:#fb923c;font-size:0.7rem;font-weight:400;">(${r.note})</span>` : ''}</td>
+            <td class="price">${money(price)}${compInfo}${r.note ? ` <span style="color:#fb923c;font-size:0.7rem;font-weight:400;">(${r.note})</span>` : ''}</td>
             <td>${pcLink}</td>
           </tr>`;
         }
