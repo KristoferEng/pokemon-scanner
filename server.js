@@ -1752,10 +1752,12 @@ function buildEveningEmailHtml() {
 }
 
 async function sendEveningEmail() {
-  // Sanitize: trim whitespace + strip any non-ASCII characters (smart quotes,
-  // zero-width spaces, etc. that can sneak in via dashboard paste)
+  // Extract the first valid email address from the env var. Defends against
+  // whole-sentence pastes ("kris@cometary.io (since ...)") and stray
+  // smart quotes / NBSPs.
   const rawRecipient = process.env.EVENING_EMAIL_TO || "slikqaz@gmail.com";
-  const recipient = String(rawRecipient).trim().replace(/[^\x20-\x7e]/g, '');
+  const emailMatch = String(rawRecipient).match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const recipient = emailMatch ? emailMatch[0] : "slikqaz@gmail.com";
   const html = buildEveningEmailHtml();
   const subject = `🎴 PSA 10 Base Set Scan — ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' })}`;
 
