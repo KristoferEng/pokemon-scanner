@@ -1752,7 +1752,10 @@ function buildEveningEmailHtml() {
 }
 
 async function sendEveningEmail() {
-  const recipient = process.env.EVENING_EMAIL_TO || "slikqaz@gmail.com";
+  // Sanitize: trim whitespace + strip any non-ASCII characters (smart quotes,
+  // zero-width spaces, etc. that can sneak in via dashboard paste)
+  const rawRecipient = process.env.EVENING_EMAIL_TO || "slikqaz@gmail.com";
+  const recipient = String(rawRecipient).trim().replace(/[^\x20-\x7e]/g, '');
   const html = buildEveningEmailHtml();
   const subject = `🎴 PSA 10 Base Set Scan — ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' })}`;
 
