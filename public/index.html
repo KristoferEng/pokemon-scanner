@@ -112,6 +112,31 @@
           </thead>
           <tbody></tbody>
         </table></div>
+
+        <h2>Fanatics Collect <span class="count-badge" id="fanaticsCount">0</span> <span id="fanaticsLastUpdate" style="font-size:0.7rem;color:#94a3b8;font-weight:400;margin-left:6px;"></span></h2>
+        <div class="table-wrap"><table id="fanaticsTable">
+          <thead>
+            <tr><th>Have</th><th>Card</th><th>Title</th><th>Type</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Listed/Ends</th><th>Listing</th><th>PriceCharting</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table></div>
+
+        <h2>Mercari (last 60 days) <span class="count-badge" id="mercariCount">0</span> <span id="mercariLastUpdate" style="font-size:0.7rem;color:#94a3b8;font-weight:400;margin-left:6px;"></span></h2>
+        <div class="table-wrap"><table id="mercariTable">
+          <thead>
+            <tr><th>Have</th><th>Card</th><th>Title</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Updated</th><th>Listing</th><th>PriceCharting</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table></div>
+
+        <h2>TCGplayer <span class="count-badge" id="tcgCount">0</span> <span id="tcgLastUpdate" style="font-size:0.7rem;color:#94a3b8;font-weight:400;margin-left:6px;"></span></h2>
+        <p style="font-size:0.7rem;color:#94a3b8;margin-bottom:8px;">TCGplayer marketplace primarily lists raw singles; PSA 10 graded slabs are rare here.</p>
+        <div class="table-wrap"><table id="tcgTable">
+          <thead>
+            <tr><th>Have</th><th>Card</th><th>Title</th><th>Price</th><th>Market Price</th><th>Difference</th><th>% Over Market</th><th>Listing</th><th>PriceCharting</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table></div>
       </div>
     </div>
 
@@ -216,28 +241,41 @@
       document.getElementById('lastScanInfo').textContent = 'Scan in progress...';
 
       try {
-        const resp = await fetch('/api/trigger-scan', { method: 'POST' });
-        const data = await resp.json();
-        if (data.status === 'already_running') {
-          document.getElementById('lastScanInfo').textContent = 'Scan already in progress...';
-        }
+        // Trigger eBay base set scan + all other sources in parallel
+        await Promise.all([
+          fetch('/api/trigger-scan', { method: 'POST' }).catch(() => {}),
+          fetch('/api/trigger-all-sources', { method: 'POST' }).catch(() => {}),
+        ]);
         // Poll for completion
         const poll = setInterval(async () => {
-          const r = await fetch('/api/cached-results');
-          const d = await r.json();
-          if (!d.scanInProgress) {
+          const [r1, r2, r3, r4] = await Promise.all([
+            fetch('/api/cached-results').then(r => r.json()),
+            fetch('/api/fanatics-listings').then(r => r.json()),
+            fetch('/api/mercari-listings').then(r => r.json()),
+            fetch('/api/tcgplayer-listings').then(r => r.json()),
+          ]);
+          // Update tables continuously while scan is running
+          if (r1.results) {
+            document.getElementById('binCount').textContent = r1.results.buyItNow.length;
+            document.getElementById('auctionCount').textContent = r1.results.auctions.length;
+            renderDealTable('#binTable tbody', r1.results.buyItNow);
+            renderDealTable('#auctionTable tbody', r1.results.auctions);
+          }
+          document.getElementById('fanaticsCount').textContent = (r2.listings || []).length;
+          document.getElementById('mercariCount').textContent = (r3.listings || []).length;
+          document.getElementById('tcgCount').textContent = (r4.listings || []).length;
+          renderSourceTable('#fanaticsTable tbody', r2.listings || [], 'fanatics');
+          renderSourceTable('#mercariTable tbody', r3.listings || [], 'mercari');
+          renderSourceTable('#tcgTable tbody', r4.listings || [], 'tcg');
+
+          const allDone = !r1.scanInProgress && !r2.inProgress && !r3.inProgress && !r4.inProgress;
+          if (allDone) {
             clearInterval(poll);
             btn.disabled = false;
             btn.textContent = 'Run Live Scan';
-            if (d.results) {
-              document.getElementById('binCount').textContent = d.results.buyItNow.length;
-              document.getElementById('auctionCount').textContent = d.results.auctions.length;
-              renderDealTable('#binTable tbody', d.results.buyItNow);
-              renderDealTable('#auctionTable tbody', d.results.auctions);
-            }
-            if (d.lastScanTime) {
+            if (r1.lastScanTime) {
               document.getElementById('lastScanInfo').textContent =
-                'Last scan: ' + new Date(d.lastScanTime).toLocaleString() + ' — auto-refreshes hourly';
+                'Last scan: ' + new Date(r1.lastScanTime).toLocaleString() + ' — auto-refreshes hourly';
             }
           }
         }, 5000);
@@ -352,7 +390,147 @@
       // Re-render all deal tables and market prices
       for (const sel of Object.keys(_dealTableCache)) renderDealTable(sel);
       if (_marketData) renderMarketPrices();
+      renderSourceTable('#fanaticsTable tbody', _sourceCache.fanatics, 'fanatics');
+      renderSourceTable('#mercariTable tbody', _sourceCache.mercari, 'mercari');
+      renderSourceTable('#tcgTable tbody', _sourceCache.tcg, 'tcg');
     }
+
+    // ===== MULTI-SOURCE TABLES (Fanatics, Mercari, TCGplayer) =====
+    const _sourceCache = { fanatics: [], mercari: [], tcg: [] };
+
+    function fmtTimeAgo(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      const diff = Date.now() - d.getTime();
+      const days = Math.floor(diff / (24 * 3600 * 1000));
+      const hrs = Math.floor((diff % (24*3600*1000)) / (3600*1000));
+      if (days >= 7) return d.toLocaleDateString();
+      if (days >= 1) return `${days}d ago`;
+      if (hrs >= 1) return `${hrs}h ago`;
+      return 'just now';
+    }
+
+    function fmtAuctionEnd(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      const diffMs = d.getTime() - Date.now();
+      const days = Math.floor(diffMs / (24 * 3600 * 1000));
+      if (diffMs < 0) return 'ended';
+      if (days >= 1) return `${days}d`;
+      const hrs = Math.floor(diffMs / (3600*1000));
+      if (hrs >= 1) return `${hrs}h`;
+      return `${Math.max(1, Math.floor(diffMs/60000))}m`;
+    }
+
+    function renderSourceTable(selector, items, sourceKey) {
+      _sourceCache[sourceKey] = items || _sourceCache[sourceKey] || [];
+      const cached = _sourceCache[sourceKey];
+      const tbody = document.querySelector(selector);
+      if (!tbody) return;
+      const isFanatics = sourceKey === 'fanatics';
+      const isMercari = sourceKey === 'mercari';
+      const colspan = isFanatics ? 11 : isMercari ? 10 : 9;
+      if (!cached.length) {
+        tbody.innerHTML = `<tr><td colspan="${colspan}" class="empty">No listings cached. Click "Run Live Scan" to fetch.</td></tr>`;
+        return;
+      }
+      const owned = getOwnedSet('owned_cards');
+      const sorted = cached.slice().sort((a, b) => {
+        const ao = owned.has(a.name) ? 1 : 0;
+        const bo = owned.has(b.name) ? 1 : 0;
+        if (ao !== bo) return ao - bo;
+        if (a.pctOverMarket == null) return 1;
+        if (b.pctOverMarket == null) return -1;
+        return a.pctOverMarket - b.pctOverMarket;
+      });
+
+      let html = '';
+      for (const it of sorted) {
+        const isOwned = owned.has(it.name);
+        const checked = isOwned ? 'checked' : '';
+        const rowStyle = isOwned ? 'opacity:0.5;' : '';
+        const safeName = it.name.replace(/'/g, "\\'");
+        const mp = it.marketPrice != null ? '$' + it.marketPrice.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : 'N/A';
+        const diff = it.difference != null
+          ? (it.difference < 0 ? '-$' + Math.abs(it.difference).toFixed(2) : '+$' + it.difference.toFixed(2))
+          : 'N/A';
+        const diffClass = it.difference != null ? (it.difference < 0 ? 'negative' : 'positive') : '';
+        const pct = it.pctOverMarket != null
+          ? (it.pctOverMarket < 0 ? it.pctOverMarket.toFixed(1) + '%' : '+' + it.pctOverMarket.toFixed(1) + '%')
+          : 'N/A';
+        const pctClass = it.pctOverMarket != null ? (it.pctOverMarket < 0 ? 'negative' : 'positive') : '';
+        const titleShort = (it.title || '').length > 60 ? it.title.substring(0, 60) + '…' : (it.title || '');
+        const pcLink = it.pricechartingUrl ? `<a href="${it.pricechartingUrl}" target="_blank">View</a>` : '—';
+        const listingLink = it.listingUrl ? `<a href="${it.listingUrl}" target="_blank">View</a>` : '—';
+
+        if (isFanatics) {
+          const typeLabel = it.isAuction ? `Auction${it.bidCount ? ` (${it.bidCount} bids)` : ''}` : 'Buy Now';
+          const timeLabel = it.isAuction ? `ends in ${fmtAuctionEnd(it.auctionEndsAt)}` : (it.listedAt ? fmtTimeAgo(it.listedAt) : '—');
+          html += `<tr style="${rowStyle}">
+            <td><input type="checkbox" ${checked} onchange="toggleOwnedCard('${safeName}')"></td>
+            <td>${it.name}</td>
+            <td title="${(it.title||'').replace(/"/g,'&quot;')}">${titleShort}</td>
+            <td>${typeLabel}</td>
+            <td class="price">$${(it.price||0).toFixed(2)}</td>
+            <td>${mp}</td>
+            <td class="${diffClass}">${diff}</td>
+            <td class="${pctClass}">${pct}</td>
+            <td>${timeLabel}</td>
+            <td>${listingLink}</td>
+            <td>${pcLink}</td>
+          </tr>`;
+        } else if (isMercari) {
+          html += `<tr style="${rowStyle}">
+            <td><input type="checkbox" ${checked} onchange="toggleOwnedCard('${safeName}')"></td>
+            <td>${it.name}</td>
+            <td title="${(it.title||'').replace(/"/g,'&quot;')}">${titleShort}</td>
+            <td class="price">$${(it.price||0).toFixed(2)}</td>
+            <td>${mp}</td>
+            <td class="${diffClass}">${diff}</td>
+            <td class="${pctClass}">${pct}</td>
+            <td>${it.listedAt ? fmtTimeAgo(it.listedAt) : '—'}</td>
+            <td>${listingLink}</td>
+            <td>${pcLink}</td>
+          </tr>`;
+        } else {
+          html += `<tr style="${rowStyle}">
+            <td><input type="checkbox" ${checked} onchange="toggleOwnedCard('${safeName}')"></td>
+            <td>${it.name}</td>
+            <td title="${(it.title||'').replace(/"/g,'&quot;')}">${titleShort}</td>
+            <td class="price">$${(it.price||0).toFixed(2)}</td>
+            <td>${mp}</td>
+            <td class="${diffClass}">${diff}</td>
+            <td class="${pctClass}">${pct}</td>
+            <td>${listingLink}</td>
+            <td>${pcLink}</td>
+          </tr>`;
+        }
+      }
+      tbody.innerHTML = html;
+    }
+
+    async function loadSourceData() {
+      try {
+        const [fanRes, mercRes, tcgRes] = await Promise.all([
+          fetch('/api/fanatics-listings').then(r => r.json()).catch(() => ({})),
+          fetch('/api/mercari-listings').then(r => r.json()).catch(() => ({})),
+          fetch('/api/tcgplayer-listings').then(r => r.json()).catch(() => ({})),
+        ]);
+        document.getElementById('fanaticsCount').textContent = (fanRes.listings || []).length;
+        document.getElementById('mercariCount').textContent = (mercRes.listings || []).length;
+        document.getElementById('tcgCount').textContent = (tcgRes.listings || []).length;
+        document.getElementById('fanaticsLastUpdate').textContent = fanRes.lastUpdate ? 'updated ' + fmtTimeAgo(fanRes.lastUpdate) : 'never run';
+        document.getElementById('mercariLastUpdate').textContent = mercRes.lastUpdate ? 'updated ' + fmtTimeAgo(mercRes.lastUpdate) : 'never run';
+        document.getElementById('tcgLastUpdate').textContent = tcgRes.lastUpdate ? 'updated ' + fmtTimeAgo(tcgRes.lastUpdate) : 'never run';
+        renderSourceTable('#fanaticsTable tbody', fanRes.listings || [], 'fanatics');
+        renderSourceTable('#mercariTable tbody', mercRes.listings || [], 'mercari');
+        renderSourceTable('#tcgTable tbody', tcgRes.listings || [], 'tcg');
+      } catch (e) {
+        console.error('loadSourceData', e);
+      }
+    }
+    loadSourceData();
+    setInterval(loadSourceData, 5 * 60 * 1000);
 
     // ===== ENDING AUCTIONS TAB =====
     async function loadEndingAuctions(forceRefresh) {

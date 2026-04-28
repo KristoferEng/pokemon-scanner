@@ -580,6 +580,17 @@ let marketPricesInProgress = false;
 let cachedCollectionPrices = {};
 let collectionPricesInProgress = false;
 
+// New marketplace caches
+let cachedFanaticsListings = null;
+let fanaticsLastUpdate = null;
+let fanaticsInProgress = false;
+let cachedMercariListings = null;
+let mercariLastUpdate = null;
+let mercariInProgress = false;
+let cachedTcgListings = null;
+let tcgLastUpdate = null;
+let tcgInProgress = false;
+
 function saveCache() {
   try {
     // Preserve last live PriceCharting prices separately for fallback on restart
@@ -588,6 +599,9 @@ function saveCache() {
     fs.writeFileSync(CACHE_FILE, JSON.stringify({
       cachedResults, lastScanTime, cachedMarketPrices, marketPricesLastUpdate,
       cachedCollectionPrices,
+      cachedFanaticsListings, fanaticsLastUpdate,
+      cachedMercariListings, mercariLastUpdate,
+      cachedTcgListings, tcgLastUpdate,
       // Only update lastLive when we have a real PriceCharting fetch
       lastLiveMarketPrices: isLive ? cachedMarketPrices : (existing.lastLiveMarketPrices || null),
       lastLiveMarketPricesUpdate: isLive ? marketPricesLastUpdate : (existing.lastLiveMarketPricesUpdate || null),
@@ -604,6 +618,12 @@ function loadCache() {
       cachedMarketPrices = data.cachedMarketPrices || null;
       marketPricesLastUpdate = data.marketPricesLastUpdate || null;
       cachedCollectionPrices = data.cachedCollectionPrices || {};
+      cachedFanaticsListings = data.cachedFanaticsListings || null;
+      fanaticsLastUpdate = data.fanaticsLastUpdate || null;
+      cachedMercariListings = data.cachedMercariListings || null;
+      mercariLastUpdate = data.mercariLastUpdate || null;
+      cachedTcgListings = data.cachedTcgListings || null;
+      tcgLastUpdate = data.tcgLastUpdate || null;
       console.log("[Cache] Loaded from disk. LastScan:", lastScanTime);
     }
   } catch (e) { console.error("[Cache] Load error:", e.message); }
@@ -1177,6 +1197,627 @@ async function fetchEndingAuctions() {
   console.log(`[EndingAuctions] Done. ${allAuctions.length} total auctions cached.`);
   return allAuctions;
 }
+
+// ============================================================================
+// MULTI-SOURCE SCRAPERS: Fanatics Collect, Mercari, TCGplayer
+// ============================================================================
+
+// Identify base set card from a listing title. Returns { cardName, isOneOfOne } or null.
+// Same exclusion rules as identifyCard, but a bit more lenient for non-eBay sources.
+function identifyBaseSetCard(title) {
+  const t = (title || '').toLowerCase();
+  if (!/psa\s*10/i.test(title)) return null;
+  // If title also mentions any other PSA grade (PSA 1..9), reject — likely two-card listing
+  if (/\bpsa\s*[1-9](\.\d)?\b/i.test(t)) return null;
+  // Reject sold / completed listings
+  if (/\b(sold|completed|ended|out\s*of\s*stock)\b/i.test(t)) return null;
+  if (/\b(bgs|cgc|sgc|ace|ags|beckett)\b/i.test(title)) return null;
+  if (/\b(pack|booster|box|sealed|lot|bundle|case|etb|complete\s*set|wrapper|artwork|deck)\b/i.test(t)) return null;
+  if (/\b(raw|ungraded)\b/i.test(t)) return null;
+  if (/shadowless|1st\s*edition|first\s*edition|1st\s*ed\b/i.test(t)) return null;
+  if (/base\s*set\s*2|base\s*ii|base\s*2\b|celebrations|classic\s*collection|legendary\s*collection|evolutions|reprint|world\s*championship/i.test(t)) return null;
+  if (/\b(japanese|japan|jpn|korean|chinese|french|german|italian|spanish|portuguese)\b/i.test(t)) return null;
+  // Reject custom / fan-made / proxy
+  if (/\b(custom|fan\s*made|proxy|replica|hand\s*made)\b/i.test(t)) return null;
+  // Reject other set Pokemon EX cards (e.g. SV Charizard EX) — base set has no EX cards
+  if (/\b(ex|gx|vmax|v-max|vstar|tag\s*team|prime|sv\d|swsh|xy)\b/i.test(t) && !/\b(beedrill|hitmon|magneto|exegg|exec)/i.test(t)) return null;
+
+  const numMatch = t.match(/(?:#|no\.?\s*)?(\d{1,3})\s*\/\s*102/) || (t.includes('base set') && t.match(/(?:#|no\.?\s*)(\d{1,3})\b/));
+  if (numMatch) {
+    const num = parseInt(numMatch[1]);
+    if (num >= 1 && num <= 102) {
+      const card = BASE_SET_CARDS.find((c) => c.number === num);
+      if (card) return card.name;
+    }
+  }
+  // Fallback: match by name within "base set" context
+  if (t.includes('base set') || t.includes('1999')) {
+    const sorted = [...BASE_SET_CARDS].sort((a, b) => b.name.length - a.name.length);
+    for (const card of sorted) {
+      if (t.includes(card.name.toLowerCase())) return card.name;
+    }
+  }
+  return null;
+}
+
+function buildItemFromListing(rawListing, sourceName) {
+  const cardName = identifyBaseSetCard(rawListing.title);
+  if (!cardName) return null;
+  const marketEntry = (cachedMarketPrices || []).find(m => m.name === cardName);
+  const marketPrice = marketEntry ? marketEntry.psa10Price : (FALLBACK_PSA10[cardName] || null);
+  const pricechartingUrl = marketEntry ? marketEntry.pricechartingUrl : null;
+  const difference = marketPrice != null && rawListing.price != null ? rawListing.price - marketPrice : null;
+  const pctOverMarket = marketPrice != null && marketPrice > 0 && rawListing.price != null
+    ? ((rawListing.price - marketPrice) / marketPrice) * 100 : null;
+  return {
+    source: sourceName,
+    name: cardName,
+    title: rawListing.title,
+    price: rawListing.price,
+    marketPrice,
+    difference,
+    pctOverMarket,
+    listingUrl: rawListing.url,
+    pricechartingUrl,
+    isAuction: !!rawListing.isAuction,
+    auctionEndsAt: rawListing.endsAt || null,
+    bidCount: rawListing.bidCount,
+    location: rawListing.location || '',
+    listedAt: rawListing.listedAt || null,
+    verified: !!marketPrice,
+  };
+}
+
+function sortListings(items) {
+  items.sort((a, b) => {
+    if (a.pctOverMarket == null && b.pctOverMarket == null) return 0;
+    if (a.pctOverMarket == null) return 1;
+    if (b.pctOverMarket == null) return -1;
+    return a.pctOverMarket - b.pctOverMarket;
+  });
+  return items;
+}
+
+// ===== FANATICS COLLECT (GraphQL) =====
+async function fanaticsGraphQL(query, vars) {
+  const resp = await fetch("https://app.fanaticscollect.com/graphql", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Origin": "https://www.fanaticscollect.com",
+      "Referer": "https://www.fanaticscollect.com/",
+      "User-Agent": PC_UA,
+    },
+    body: JSON.stringify({ operationName: "q", query, variables: vars || {} }),
+  });
+  if (!resp.ok) throw new Error(`Fanatics GraphQL ${resp.status}`);
+  const json = await resp.json();
+  if (json.errors) throw new Error(`Fanatics GraphQL: ${JSON.stringify(json.errors).substring(0, 200)}`);
+  return json.data;
+}
+
+async function fetchFanaticsListings() {
+  console.log("[Fanatics] Fetching PSA 10 1999 base set listings...");
+
+  // Step 1: search Algolia for matching listing UUIDs
+  const searchQueries = [
+    "psa 10 1999 base set",
+    "psa 10 base set unlimited",
+    "psa 10 pokemon base set",
+  ];
+
+  const seenIds = new Set();
+  const allUuids = [];
+  for (const q of searchQueries) {
+    try {
+      const data = await fanaticsGraphQL(
+        `query q { collectAlgoliaSearch(requests: [{indexName: LISTING_LOWEST_PRICE, query: "${q.replace(/"/g, '\\"')}"}]) { hits { listingUuid } } }`
+      );
+      const hits = data?.collectAlgoliaSearch?.[0]?.hits || [];
+      for (const h of hits) {
+        if (!seenIds.has(h.listingUuid)) {
+          seenIds.add(h.listingUuid);
+          allUuids.push(h.listingUuid);
+        }
+      }
+    } catch (e) {
+      console.log(`[Fanatics] Search "${q}" error: ${e.message}`);
+    }
+    await delay(500, 1000);
+  }
+  console.log(`[Fanatics] Found ${allUuids.length} unique listing UUIDs`);
+
+  // Step 2: fetch each listing (try each type until one works)
+  const results = [];
+  const types = ['WEEKLY', 'PREMIER', 'BO', 'FIXED_PRICE'];
+  const detailQuery = `query q($id: UUID!, $type: CollectListingType!) {
+    collectListing(id: $id, type: $type) {
+      id title slug listingType status listedAt insertedAt updatedAt bidCount
+      currentBid { amountInCents currency }
+      buyNowPrice { amountInCents currency }
+      askingPrice { amountInCents currency }
+      startingPrice { amountInCents currency }
+      auction { name endsAt status }
+      images
+    }
+  }`;
+
+  for (const uuid of allUuids.slice(0, 60)) {
+    let listing = null;
+    let foundType = null;
+    for (const type of types) {
+      try {
+        const data = await fanaticsGraphQL(detailQuery, { id: uuid, type });
+        if (data?.collectListing) {
+          listing = data.collectListing;
+          foundType = type;
+          break;
+        }
+      } catch {}
+    }
+    if (!listing) continue;
+
+    const title = listing.title || '';
+
+    // Determine price: auction = currentBid (or startingPrice if no bids), otherwise buyNowPrice/askingPrice
+    let priceCents = null;
+    let isAuction = false;
+    if (foundType === 'WEEKLY' || foundType === 'PREMIER') {
+      isAuction = true;
+      priceCents = (listing.currentBid?.amountInCents > 0 ? listing.currentBid.amountInCents : null)
+        ?? listing.startingPrice?.amountInCents
+        ?? null;
+    } else {
+      priceCents = listing.buyNowPrice?.amountInCents ?? listing.askingPrice?.amountInCents ?? null;
+    }
+
+    const price = priceCents != null ? priceCents / 100 : null;
+    if (price == null || price < 5) continue;
+
+    const cardName = identifyBaseSetCard(title);
+    if (!cardName) continue;
+
+    const url = `https://www.fanaticscollect.com/weekly-auction?listing=${listing.id}`;
+
+    const item = buildItemFromListing({
+      title,
+      price,
+      url,
+      isAuction,
+      endsAt: listing.auction?.endsAt || null,
+      bidCount: listing.bidCount || 0,
+      listedAt: listing.listedAt || listing.insertedAt || null,
+      location: 'United States', // Fanatics is US-based marketplace
+    }, 'Fanatics Collect');
+    if (item) results.push(item);
+    await delay(250, 500);
+  }
+
+  console.log(`[Fanatics] ${results.length} valid base set PSA 10 listings`);
+  cachedFanaticsListings = sortListings(results);
+  fanaticsLastUpdate = new Date().toISOString();
+  saveCache();
+  return cachedFanaticsListings;
+}
+
+// ===== MERCARI (via Jina reader proxy to bypass Cloudflare) =====
+async function jinaFetch(url) {
+  const jinaUrl = `https://r.jina.ai/${url}`;
+  const resp = await fetch(jinaUrl, { headers: { 'User-Agent': PC_UA } });
+  if (!resp.ok) throw new Error(`Jina ${resp.status}`);
+  return resp.text();
+}
+
+async function fetchMercariListings() {
+  console.log("[Mercari] Fetching PSA 10 1999 base set listings via Jina...");
+
+  // Sort by newest so we get recent posts; "last 2 months" filter applied later.
+  // Use multiple queries to broaden coverage.
+  const searchUrls = [
+    'https://www.mercari.com/search/?keyword=psa+10+1999+base+set+pokemon&sortBy=2&orderBy=1', // sortBy=2 = listed_time
+    'https://www.mercari.com/search/?keyword=psa+10+pokemon+base+set+unlimited&sortBy=2&orderBy=1',
+    'https://www.mercari.com/search/?keyword=1999+base+set+psa+10&sortBy=2&orderBy=1',
+  ];
+
+  const seenItemIds = new Set();
+  const allRaw = [];
+  for (const url of searchUrls) {
+    try {
+      const text = await jinaFetch(url);
+      // Match links of the form: [![Image N: title](image_url?_=TIMESTAMP) optional discount label title $price[$origPrice]](https://www.mercari.com/us/item/<id>/...)
+      // The full listing markdown is on a single line in jina output, so
+      // restrict the "middle" group to non-newline characters and require the
+      // image URL to be the Mercari image CDN with a timestamp parameter.
+      const linkRe = /\[!\[Image\s*\d+:\s*([^\]]*?)\]\((https:\/\/u-mercari-images\.mercdn\.net\/[^)]+_=\d+)\)([^\n]*?)\]\(https:\/\/www\.mercari\.com\/us\/item\/(m\d+)\/[^)]*\)/g;
+      let m;
+      while ((m = linkRe.exec(text)) !== null) {
+        const altTitle = m[1].trim();
+        const imageUrl = m[2];
+        const middle = m[3].trim();
+        const itemId = m[4];
+        if (seenItemIds.has(itemId)) continue;
+
+        // Extract price from middle (the part between image and item URL)
+        // Format examples:
+        //   "1999 Pokémon TCG Base Set Charmeleon #24 PSA 10 $259.00"
+        //   "25% [discount-icon] Vintage 1999-2000 pokemon base set $75.00$100.00"
+        const priceMatches = middle.match(/\$([0-9][\d,]*\.\d{2})/g) || [];
+        if (!priceMatches.length) continue;
+        const prices = priceMatches.map(p => parseFloat(p.replace(/[$,]/g, '')));
+        // Lowest is the asking/sale price; sometimes second is original price
+        const price = prices[0];
+
+        // Title: try to extract from middle by stripping the price and discount %
+        let title = middle.replace(/\d+%/g, '').replace(/\$[0-9][\d,]*\.\d{2}/g, '').trim();
+        if (!title || title.length < 6) title = altTitle;
+        title = title.replace(/\s+/g, ' ').trim();
+
+        // Updated timestamp from image URL: ?_=NNNNNNNNNN
+        let updatedAtMs = null;
+        const tsMatch = imageUrl.match(/[?&]_=(\d{10})/);
+        if (tsMatch) updatedAtMs = parseInt(tsMatch[1], 10) * 1000;
+
+        seenItemIds.add(itemId);
+        allRaw.push({
+          itemId, title, price,
+          imageUrl, updatedAtMs,
+          url: `https://www.mercari.com/us/item/${itemId}/`,
+        });
+      }
+    } catch (e) {
+      console.log(`[Mercari] Fetch error for ${url}: ${e.message}`);
+    }
+    await delay(500, 1000);
+  }
+  console.log(`[Mercari] Got ${allRaw.length} raw listings`);
+
+  // Filter to last 2 months
+  const twoMonthsAgo = Date.now() - 60 * 24 * 60 * 60 * 1000;
+  const recent = allRaw.filter(r => !r.updatedAtMs || r.updatedAtMs >= twoMonthsAgo);
+  console.log(`[Mercari] ${recent.length} within last 2 months`);
+
+  const results = [];
+  for (const r of recent) {
+    const item = buildItemFromListing({
+      title: r.title,
+      price: r.price,
+      url: r.url,
+      isAuction: false, // Mercari is fixed-price
+      listedAt: r.updatedAtMs ? new Date(r.updatedAtMs).toISOString() : null,
+      location: 'United States',
+    }, 'Mercari');
+    if (item) results.push(item);
+  }
+
+  console.log(`[Mercari] ${results.length} valid base set PSA 10 listings`);
+  cachedMercariListings = sortListings(results);
+  mercariLastUpdate = new Date().toISOString();
+  saveCache();
+  return cachedMercariListings;
+}
+
+// ===== TCGPLAYER (via mp-search-api - Marketplace listings) =====
+// TCGplayer Marketplace lets sellers list graded slabs alongside raw cards. We
+// search for products in "Pokémon - Base Set" then fetch listings for each
+// product, keeping only ones whose title or condition indicates PSA 10.
+async function fetchTcgPlayerListings() {
+  console.log("[TCGplayer] Fetching PSA 10 base set listings...");
+  const apiBase = "https://mp-search-api.tcgplayer.com/v1/search";
+
+  // Step 1: Get all products in "Base Set" (Pokemon)
+  const searchBody = {
+    algorithm: "",
+    from: 0,
+    size: 50, // TCGplayer caps at 50 per page
+    filters: { term: { productLineName: ["pokemon"], setName: ["base-set"] }, range: {}, match: {} },
+    context: { shippingCountry: "US" },
+    sort: { field: "product-name", order: "asc" },
+  };
+  let products = [];
+  for (let page = 0; page < 4; page++) {
+    const body = { ...searchBody, from: page * 50 };
+    try {
+      const resp = await fetch(`${apiBase}/request?q=&isList=false`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Origin": "https://www.tcgplayer.com",
+          "Referer": "https://www.tcgplayer.com/",
+          "User-Agent": PC_UA,
+        },
+        body: JSON.stringify(body),
+      });
+      const text = await resp.text();
+      if (!resp.ok) {
+        console.log(`[TCGplayer] page ${page} HTTP ${resp.status}: ${text.substring(0, 150)}`);
+        break;
+      }
+      const data = JSON.parse(text);
+      const pageResults = data?.results?.[0]?.results || [];
+      const total = data?.results?.[0]?.totalResults || 0;
+      products = products.concat(pageResults);
+      if (pageResults.length === 0 || products.length >= total) break;
+    } catch (e) {
+      console.log(`[TCGplayer] page ${page} error: ${e.message}`);
+      break;
+    }
+    await delay(300, 600);
+  }
+  console.log(`[TCGplayer] Found ${products.length} base set products`);
+
+  // Step 2: For each product fetch listings, filter for PSA 10
+  const results = [];
+  for (const product of products.slice(0, 110)) {
+    try {
+      const lresp = await fetch(`${apiBase}/product/${product.productId}/listings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Origin": "https://www.tcgplayer.com",
+          "Referer": "https://www.tcgplayer.com/",
+          "User-Agent": PC_UA,
+        },
+        body: JSON.stringify({
+          filters: { term: {}, range: {}, exclude: { channelExclusion: 0 } },
+          from: 0, size: 30,
+          context: { shippingCountry: "US" },
+          aggregations: ["listingType"],
+          sort: { field: "price+shipping", order: "asc" },
+        }),
+      });
+      if (!lresp.ok) continue;
+      const ldata = await lresp.json();
+      const listings = ldata?.results?.[0]?.results || [];
+
+      for (const l of listings) {
+        const condName = (l.conditionName || '').toLowerCase();
+        const customAttrs = JSON.stringify(l.customAttributes || {}).toLowerCase();
+        const sellerNote = (l.customListingId || '') + ' ' + (l.customListingDescription || '');
+        const allText = `${condName} ${customAttrs} ${sellerNote}`.toLowerCase();
+        if (!/psa\s*10/.test(allText)) continue;
+
+        const productTitle = `${product.productName} [${product.setName}]`;
+        const fullTitle = `1999 Pokemon Base Set ${product.productName} PSA 10 ${l.conditionName || ''}`;
+        const cardName = identifyBaseSetCard(fullTitle);
+        if (!cardName) continue;
+
+        const price = (l.price || 0) + (l.shippingPrice || 0);
+        if (price < 10) continue;
+
+        const url = `https://www.tcgplayer.com/product/${product.productId}/${product.productUrlName || ''}?Language=English&Condition=${encodeURIComponent(l.conditionName || '')}`;
+
+        const item = buildItemFromListing({
+          title: fullTitle,
+          price,
+          url,
+          isAuction: false,
+          listedAt: l.listingDate || null,
+          location: 'United States',
+        }, 'TCGplayer');
+        if (item) results.push(item);
+      }
+    } catch (e) {
+      // skip
+    }
+    await delay(300, 600);
+  }
+
+  console.log(`[TCGplayer] ${results.length} valid PSA 10 base set listings`);
+  cachedTcgListings = sortListings(results);
+  tcgLastUpdate = new Date().toISOString();
+  saveCache();
+  return cachedTcgListings;
+}
+
+// ===== Multi-source endpoints =====
+app.get("/api/fanatics-listings", (req, res) => {
+  res.json({ listings: cachedFanaticsListings || [], lastUpdate: fanaticsLastUpdate, inProgress: fanaticsInProgress });
+});
+app.post("/api/trigger-fanatics", (req, res) => {
+  if (fanaticsInProgress) return res.json({ status: "already_running" });
+  fanaticsInProgress = true;
+  fetchFanaticsListings().catch(e => console.error("[Fanatics]", e.message)).finally(() => { fanaticsInProgress = false; });
+  res.json({ status: "started" });
+});
+
+app.get("/api/mercari-listings", (req, res) => {
+  res.json({ listings: cachedMercariListings || [], lastUpdate: mercariLastUpdate, inProgress: mercariInProgress });
+});
+app.post("/api/trigger-mercari", (req, res) => {
+  if (mercariInProgress) return res.json({ status: "already_running" });
+  mercariInProgress = true;
+  fetchMercariListings().catch(e => console.error("[Mercari]", e.message)).finally(() => { mercariInProgress = false; });
+  res.json({ status: "started" });
+});
+
+app.get("/api/tcgplayer-listings", (req, res) => {
+  res.json({ listings: cachedTcgListings || [], lastUpdate: tcgLastUpdate, inProgress: tcgInProgress });
+});
+app.post("/api/trigger-tcgplayer", (req, res) => {
+  if (tcgInProgress) return res.json({ status: "already_running" });
+  tcgInProgress = true;
+  fetchTcgPlayerListings().catch(e => console.error("[TCGplayer]", e.message)).finally(() => { tcgInProgress = false; });
+  res.json({ status: "started" });
+});
+
+// ===== Combined trigger: kicks off all three in parallel =====
+app.post("/api/trigger-all-sources", (req, res) => {
+  const started = [];
+  if (!fanaticsInProgress) { fanaticsInProgress = true; started.push("fanatics"); fetchFanaticsListings().catch(e => console.error(e)).finally(() => { fanaticsInProgress = false; }); }
+  if (!mercariInProgress) { mercariInProgress = true; started.push("mercari"); fetchMercariListings().catch(e => console.error(e)).finally(() => { mercariInProgress = false; }); }
+  if (!tcgInProgress) { tcgInProgress = true; started.push("tcgplayer"); fetchTcgPlayerListings().catch(e => console.error(e)).finally(() => { tcgInProgress = false; }); }
+  res.json({ status: "started", started });
+});
+
+// ============================================================================
+// EVENING CRON: full scan + email
+// ============================================================================
+async function runEveningScan(opts = {}) {
+  console.log("[Evening] Starting full evening scan...");
+  const start = Date.now();
+
+  // Run all scans (eBay, Fanatics, Mercari, TCGplayer) in parallel-ish.
+  // eBay scan depends on market prices; do a market refresh first.
+  try {
+    if (!marketPricesInProgress) {
+      marketPricesInProgress = true;
+      await fetchAllMarketPrices().catch(e => console.error("[Evening] market refresh:", e.message));
+      marketPricesInProgress = false;
+    }
+  } catch {}
+
+  const results = await Promise.allSettled([
+    runAutoScan({ force: true }),
+    fanaticsInProgress ? Promise.resolve() : (async () => {
+      fanaticsInProgress = true;
+      try { await fetchFanaticsListings(); } finally { fanaticsInProgress = false; }
+    })(),
+    mercariInProgress ? Promise.resolve() : (async () => {
+      mercariInProgress = true;
+      try { await fetchMercariListings(); } finally { mercariInProgress = false; }
+    })(),
+    tcgInProgress ? Promise.resolve() : (async () => {
+      tcgInProgress = true;
+      try { await fetchTcgPlayerListings(); } finally { tcgInProgress = false; }
+    })(),
+  ]);
+
+  const dur = Math.round((Date.now() - start) / 1000);
+  console.log(`[Evening] Scan finished in ${dur}s. Statuses:`, results.map(r => r.status));
+
+  // Email
+  if (!opts.skipEmail) {
+    try { await sendEveningEmail(); } catch (e) { console.error("[Evening] Email error:", e.message); }
+  }
+  return { duration: dur, statuses: results.map(r => r.status) };
+}
+
+function fmtMoney(n) {
+  if (n == null) return 'N/A';
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(p) {
+  if (p == null) return 'N/A';
+  const sign = p < 0 ? '' : '+';
+  return `${sign}${p.toFixed(1)}%`;
+}
+
+function buildEveningEmailHtml() {
+  const ebayBin = (cachedResults?.buyItNow || []).slice(0, 25);
+  const ebayAuc = (cachedResults?.auctions || []).slice(0, 15);
+  const fan = (cachedFanaticsListings || []).slice(0, 25);
+  const merc = (cachedMercariListings || []).slice(0, 25);
+  const tcg = (cachedTcgListings || []).slice(0, 25);
+
+  const totalListings = (cachedResults?.buyItNow?.length || 0) + (cachedResults?.auctions?.length || 0)
+    + (cachedFanaticsListings?.length || 0) + (cachedMercariListings?.length || 0) + (cachedTcgListings?.length || 0);
+
+  const renderRow = (it) => `
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid #e5e7eb;font-size:13px;">${it.name || ''}</td>
+      <td style="padding:6px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#16a34a;font-weight:600;">${fmtMoney(it.price)}</td>
+      <td style="padding:6px;border-bottom:1px solid #e5e7eb;font-size:13px;">${fmtMoney(it.marketPrice)}</td>
+      <td style="padding:6px;border-bottom:1px solid #e5e7eb;font-size:13px;color:${it.pctOverMarket != null && it.pctOverMarket < 0 ? '#16a34a' : '#dc2626'};">${fmtPct(it.pctOverMarket)}</td>
+      <td style="padding:6px;border-bottom:1px solid #e5e7eb;font-size:13px;"><a href="${it.listingUrl || it.ebayUrl || ''}" style="color:#2563eb;">View</a></td>
+    </tr>`;
+
+  const renderTable = (rows, title) => {
+    if (!rows.length) return `<h3 style="margin:24px 0 8px;color:#111;">${title}</h3><p style="color:#6b7280;font-size:13px;">No listings.</p>`;
+    return `<h3 style="margin:24px 0 8px;color:#111;">${title} (${rows.length})</h3>
+      <table style="width:100%;border-collapse:collapse;font-family:-apple-system,sans-serif;">
+      <thead><tr>
+        <th style="text-align:left;padding:6px;background:#f3f4f6;font-size:12px;text-transform:uppercase;color:#6b7280;">Card</th>
+        <th style="text-align:left;padding:6px;background:#f3f4f6;font-size:12px;text-transform:uppercase;color:#6b7280;">Price</th>
+        <th style="text-align:left;padding:6px;background:#f3f4f6;font-size:12px;text-transform:uppercase;color:#6b7280;">Market</th>
+        <th style="text-align:left;padding:6px;background:#f3f4f6;font-size:12px;text-transform:uppercase;color:#6b7280;">% Over</th>
+        <th style="text-align:left;padding:6px;background:#f3f4f6;font-size:12px;text-transform:uppercase;color:#6b7280;">Link</th>
+      </tr></thead><tbody>${rows.map(renderRow).join('')}</tbody></table>`;
+  };
+
+  const ebayBinNorm = ebayBin.map(i => ({ ...i, listingUrl: i.ebayUrl }));
+  const ebayAucNorm = ebayAuc.map(i => ({ ...i, listingUrl: i.ebayUrl }));
+
+  return `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;background:#f9fafb;padding:20px;">
+    <div style="max-width:900px;margin:0 auto;background:white;padding:24px;border-radius:8px;">
+      <h1 style="color:#111;margin:0 0 8px;">Pokémon PSA 10 Base Set — Evening Scan</h1>
+      <p style="color:#6b7280;margin:0 0 24px;">${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} PT &middot; ${totalListings} listings across all sources</p>
+      ${renderTable(ebayBinNorm, '🛒 eBay - Buy It Now')}
+      ${renderTable(ebayAucNorm, '🔨 eBay - Auctions')}
+      ${renderTable(fan, '🎴 Fanatics Collect')}
+      ${renderTable(merc, '🛍 Mercari (last 60d)')}
+      ${renderTable(tcg, '🎯 TCGplayer')}
+      <p style="margin-top:32px;color:#6b7280;font-size:12px;">Scan ran at 9pm PT &middot; <a href="https://pokemon-scanner.onrender.com" style="color:#2563eb;">View live dashboard</a></p>
+    </div>
+  </body></html>`;
+}
+
+async function sendEveningEmail() {
+  const recipient = process.env.EVENING_EMAIL_TO || "slikqaz@gmail.com";
+  const html = buildEveningEmailHtml();
+  const subject = `🎴 PSA 10 Base Set Scan — ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric' })}`;
+
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey) {
+    const fromAddr = process.env.RESEND_FROM || "Pokemon Scanner <onboarding@resend.dev>";
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: fromAddr, to: [recipient], subject, html }),
+    });
+    if (!resp.ok) throw new Error(`Resend ${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    console.log(`[Email] Sent via Resend to ${recipient}, id=${data.id}`);
+    return { provider: "resend", id: data.id };
+  }
+
+  const brevoKey = process.env.BREVO_API_KEY;
+  if (brevoKey) {
+    const fromEmail = process.env.BREVO_FROM_EMAIL || "noreply@cometary.io";
+    const resp = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "api-key": brevoKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sender: { email: fromEmail, name: "Pokemon Scanner" },
+        to: [{ email: recipient }],
+        subject, htmlContent: html,
+      }),
+    });
+    if (!resp.ok) throw new Error(`Brevo ${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    console.log(`[Email] Sent via Brevo to ${recipient}, id=${data.messageId}`);
+    return { provider: "brevo", id: data.messageId };
+  }
+
+  console.warn("[Email] No RESEND_API_KEY or BREVO_API_KEY set — skipping email send. Set one in env.");
+  return { provider: "none", skipped: true };
+}
+
+// Cron endpoint — protected by token to prevent abuse
+app.post("/api/cron-evening-scan", async (req, res) => {
+  const expectedToken = process.env.CRON_TOKEN;
+  const givenToken = req.headers['x-cron-token'] || (req.body && req.body.token);
+  if (expectedToken && givenToken !== expectedToken) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  // Run async; respond immediately so caller doesn't time out
+  res.json({ status: "started", at: new Date().toISOString() });
+  runEveningScan().catch(e => console.error("[Evening]", e));
+});
+
+// Test-only email endpoint (no scan, just send current cache)
+app.post("/api/cron-send-email-only", async (req, res) => {
+  const expectedToken = process.env.CRON_TOKEN;
+  const givenToken = req.headers['x-cron-token'] || (req.body && req.body.token);
+  if (expectedToken && givenToken !== expectedToken) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const result = await sendEveningEmail();
+    res.json({ status: "sent", result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get("/api/ending-auctions", async (req, res) => {
   try {

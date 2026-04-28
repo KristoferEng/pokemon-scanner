@@ -1,0 +1,118 @@
+name: Evening Scan & Email (9pm PT)
+
+# Triggers a full Pokemon base set scan on the Render server every day at 9:00 PM Pacific
+# and emails the results to slikqaz@gmail.com.
+#
+# CRON: 9pm PT = 04:00 UTC (PDT, summer) or 05:00 UTC (PST, winter).
+# We schedule both so the run happens at the right local hour year-round.
+#
+# Required GitHub secrets:
+#   CRON_TOKEN          shared secret with server's CRON_TOKEN env var
+#   RENDER_BASE_URL     e.g. https://pokemon-scanner.onrender.com (defaults to that)
+#   MAIL_USERNAME       Gmail address used to send the email (App Password required)
+#   MAIL_PASSWORD       Gmail App Password (https://myaccount.google.com/apppasswords)
+#   MAIL_TO             Recipient (defaults to slikqaz@gmail.com)
+#
+# If MAIL_USERNAME/MAIL_PASSWORD aren't set, the workflow still triggers the scan,
+# the server will attempt to send via Resend (if RESEND_API_KEY env var is set), and
+# the SMTP step is skipped.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 9pm PDT
+    - cron: '0 5 * * *'   # 9pm PST
+  workflow_dispatch: {}
+
+jobs:
+  evening-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Set base URL
+        id: cfg
+        run: |
+          BASE="${{ secrets.RENDER_BASE_URL }}"
+          if [ -z "$BASE" ]; then BASE="https://pokemon-scanner.onrender.com"; fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Wake server (Render free tier)
+        run: |
+          for i in 1 2 3; do
+            curl -fsS --max-time 60 "${{ steps.cfg.outputs.base }}/api/cached-results" > /dev/null && break
+            echo "Wake retry $i…"; sleep 10
+          done
+
+      - name: Trigger evening scan
+        run: |
+          curl -fsS -X POST "${{ steps.cfg.outputs.base }}/api/cron-evening-scan" \
+            -H "Content-Type: application/json" \
+            -H "X-Cron-Token: ${{ secrets.CRON_TOKEN }}" \
+            -d '{}'
+
+      - name: Wait for scan to finish (up to 12 min)
+        id: wait
+        run: |
+          for i in $(seq 1 36); do
+            sleep 20
+            EBAY=$(curl -fsS "${{ steps.cfg.outputs.base }}/api/cached-results" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("yes" if d.get("scanInProgress") else "no")' 2>/dev/null || echo yes)
+            FAN=$(curl -fsS "${{ steps.cfg.outputs.base }}/api/fanatics-listings" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("yes" if d.get("inProgress") else "no")' 2>/dev/null || echo yes)
+            MER=$(curl -fsS "${{ steps.cfg.outputs.base }}/api/mercari-listings" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("yes" if d.get("inProgress") else "no")' 2>/dev/null || echo yes)
+            TCG=$(curl -fsS "${{ steps.cfg.outputs.base }}/api/tcgplayer-listings" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("yes" if d.get("inProgress") else "no")' 2>/dev/null || echo yes)
+            echo "iter $i: ebay=$EBAY fanatics=$FAN mercari=$MER tcg=$TCG"
+            if [ "$EBAY" = "no" ] && [ "$FAN" = "no" ] && [ "$MER" = "no" ] && [ "$TCG" = "no" ]; then
+              echo "All scans done."
+              break
+            fi
+          done
+
+      - name: Fetch results & build email body
+        id: build
+        run: |
+          mkdir -p /tmp/scan
+          curl -fsS "${{ steps.cfg.outputs.base }}/api/cached-results" > /tmp/scan/ebay.json
+          curl -fsS "${{ steps.cfg.outputs.base }}/api/fanatics-listings" > /tmp/scan/fanatics.json
+          curl -fsS "${{ steps.cfg.outputs.base }}/api/mercari-listings" > /tmp/scan/mercari.json
+          curl -fsS "${{ steps.cfg.outputs.base }}/api/tcgplayer-listings" > /tmp/scan/tcg.json
+          python3 .github/workflows/build_email.py \
+            --ebay /tmp/scan/ebay.json \
+            --fanatics /tmp/scan/fanatics.json \
+            --mercari /tmp/scan/mercari.json \
+            --tcg /tmp/scan/tcg.json \
+            --base "${{ steps.cfg.outputs.base }}" \
+            --out /tmp/scan/email.html
+          # subject
+          DATE=$(TZ=America/Los_Angeles date +"%b %-d")
+          echo "subject=PSA 10 Base Set Scan — $DATE" >> "$GITHUB_OUTPUT"
+
+      - name: Check if SMTP secrets are set
+        id: smtp_check
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+        run: |
+          if [ -n "$MAIL_USERNAME" ]; then
+            echo "enabled=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::MAIL_USERNAME secret not set; SMTP step will be skipped. Server-side Resend/Brevo (if RESEND_API_KEY/BREVO_API_KEY env is set on Render) is the fallback."
+          fi
+
+      - name: Send email via Gmail SMTP
+        if: steps.smtp_check.outputs.enabled == 'yes'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.build.outputs.subject }}
+          to: ${{ secrets.MAIL_TO || 'slikqaz@gmail.com' }}
+          from: Pokemon Scanner <${{ secrets.MAIL_USERNAME }}>
+          html_body: file:///tmp/scan/email.html
+
+      - name: Upload email body as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: evening-scan-email
+          path: /tmp/scan/email.html
+          retention-days: 7
