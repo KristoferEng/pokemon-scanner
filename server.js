@@ -1809,19 +1809,15 @@ app.post("/api/cron-evening-scan", async (req, res) => {
   runEveningScan().catch(e => console.error("[Evening]", e));
 });
 
-// Debug: show the resolved recipient + char codes (no secrets leaked)
+// Debug: show the resolved recipient (no secrets leaked)
 app.get("/api/debug-email-recipient", (req, res) => {
   const raw = process.env.EVENING_EMAIL_TO || "slikqaz@gmail.com";
-  const codes = Array.from(String(raw)).map(c => c.charCodeAt(0));
-  const sanitized = String(raw).trim().replace(/[^\x20-\x7e]/g, '');
-  const hasResend = !!process.env.RESEND_API_KEY;
+  const m = String(raw).match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   res.json({
     raw,
     rawLength: String(raw).length,
-    rawCharCodes: codes,
-    sanitized,
-    sanitizedLength: sanitized.length,
-    hasResendKey: hasResend,
+    extractedEmail: m ? m[0] : null,
+    hasResendKey: !!process.env.RESEND_API_KEY,
   });
 });
 
