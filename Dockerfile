@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
     libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
     libxkbcommon0 libxrandr2 libxshmfence1 xdg-utils xvfb \
+  && install -d -m 0755 /etc/apt/keyrings \
   && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google.gpg \
-  && echo "deb [signed-by=/etc/apt/keyrings/google.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+  && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
   && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
   && rm -rf /var/lib/apt/lists/*
 
