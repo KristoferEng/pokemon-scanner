@@ -1836,6 +1836,200 @@ app.post("/api/cron-send-email-only", async (req, res) => {
   }
 });
 
+// ===== Pokémon Center stock monitor =====
+const POKECENTER_STATE_FILE = path.join(CACHE_DIR, "pokemoncenter-monitor.json");
+const POKECENTER_URL = "https://www.pokemoncenter.com/category/trading-card-game?category=tcg-cards&sort=launch_date%2Bdesc";
+let _pcMonitor = null;
+function pcMonitor() {
+  if (!_pcMonitor) _pcMonitor = require("./scripts/pokemoncenter_monitor.js");
+  return _pcMonitor;
+}
+let pokecenterState = (function () {
+  try {
+    if (fs.existsSync(POKECENTER_STATE_FILE)) return JSON.parse(fs.readFileSync(POKECENTER_STATE_FILE, "utf8"));
+  } catch {}
+  return { lastCheckAt: null, products: [], lastAlertByUrl: {}, consecutiveErrors: 0 };
+})();
+function savePokecenterState() {
+  try { fs.writeFileSync(POKECENTER_STATE_FILE, JSON.stringify(pokecenterState, null, 2)); } catch (e) { console.error("[PokeCenter] save state:", e.message); }
+}
+
+async function sendSmsToKris(message) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  const to = process.env.POKECENTER_SMS_TO || "+16506650579";
+  if (!sid || !token || !from) {
+    console.warn("[SMS] Missing TWILIO_* env vars — skipping SMS to", to);
+    return { provider: "none", skipped: true };
+  }
+  // Twilio messages REST API
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const body = new URLSearchParams({ From: from, To: to, Body: message.slice(0, 1500) });
+  const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!resp.ok) throw new Error(`Twilio ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  console.log(`[SMS] Sent to ${to}, sid=${data.sid}`);
+  return { provider: "twilio", id: data.sid };
+}
+
+async function sendPokecenterEmail(subject, html) {
+  const recipient = process.env.POKECENTER_EMAIL_TO || "slikqaz@gmail.com";
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) {
+    console.warn("[Email] RESEND_API_KEY missing — skipping pokemoncenter alert email");
+    return { provider: "none", skipped: true };
+  }
+  const fromAddr = process.env.RESEND_FROM || "Pokemon Scanner <onboarding@resend.dev>";
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: fromAddr, to: [recipient], subject, html }),
+  });
+  if (!resp.ok) throw new Error(`Resend ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  console.log(`[Email] PokeCenter alert sent to ${recipient}, id=${data.id}`);
+  return { provider: "resend", id: data.id };
+}
+
+function diffPokecenterProducts(prevList, currList) {
+  const prevByUrl = new Map((prevList || []).map(p => [p.url, p]));
+  const newlyAvailable = [];
+  for (const p of currList) {
+    if (p.soldOut) continue;
+    const prev = prevByUrl.get(p.url);
+    // Alert when: never seen before AND in stock, OR was sold out AND now in stock
+    if (!prev || prev.soldOut) newlyAvailable.push(p);
+  }
+  return newlyAvailable;
+}
+
+let pokecenterCheckInProgress = false;
+async function runPokecenterCheck({ force = false } = {}) {
+  if (pokecenterCheckInProgress && !force) return { skipped: "in-progress" };
+  pokecenterCheckInProgress = true;
+  try {
+    const monitor = pcMonitor();
+    let result;
+    try {
+      result = await monitor.checkPokemonCenterTcg({ timeoutMs: 60000 });
+      pokecenterState.consecutiveErrors = 0;
+    } catch (e) {
+      pokecenterState.consecutiveErrors = (pokecenterState.consecutiveErrors || 0) + 1;
+      pokecenterState.lastError = { message: e.message, at: new Date().toISOString() };
+      // After several consecutive errors, force-close the browser so next check relaunches.
+      if (pokecenterState.consecutiveErrors >= 3) {
+        try { await monitor.closeBrowser(); } catch {}
+      }
+      savePokecenterState();
+      throw e;
+    }
+
+    const newlyAvailable = diffPokecenterProducts(pokecenterState.products, result.products);
+
+    // Debounce: only alert if we haven't alerted on this URL in the last 30 min.
+    const now = Date.now();
+    const DEBOUNCE_MS = 30 * 60 * 1000;
+    pokecenterState.lastAlertByUrl = pokecenterState.lastAlertByUrl || {};
+    const toAlert = newlyAvailable.filter(p => {
+      const last = pokecenterState.lastAlertByUrl[p.url];
+      return !last || (now - last) > DEBOUNCE_MS;
+    });
+
+    if (toAlert.length > 0) {
+      const subject = `🎴 Pokémon Center: ${toAlert.length} item${toAlert.length === 1 ? "" : "s"} available!`;
+      const lines = toAlert.map(p => `• ${p.title} — ${p.price || "?"}\n${p.url}`).join("\n\n");
+      const html = `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;background:#f9fafb;padding:20px;">
+        <div style="max-width:680px;margin:0 auto;background:white;padding:24px;border-radius:8px;">
+          <h1 style="color:#111;margin:0 0 8px;">🎴 Pokémon Center — ${toAlert.length} new item${toAlert.length === 1 ? "" : "s"} available</h1>
+          <p style="color:#6b7280;margin:0 0 24px;">${new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })} PT &middot; <a href="${POKECENTER_URL}" style="color:#2563eb;">View category</a></p>
+          ${toAlert.map(p => `
+            <div style="border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin:12px 0;">
+              <div style="font-weight:600;font-size:16px;color:#111;">${p.title}</div>
+              <div style="color:#16a34a;font-weight:600;margin-top:4px;">${p.price || "Available"}</div>
+              <div style="margin-top:8px;"><a href="${p.url}" style="color:#2563eb;">${p.url}</a></div>
+            </div>`).join("")}
+        </div>
+      </body></html>`;
+      const smsBody = `🎴 PokeCenter ${toAlert.length} avail:\n` +
+        toAlert.slice(0, 3).map(p => `${p.title.slice(0, 60)} ${p.price || ""}`).join("\n") +
+        `\n${POKECENTER_URL}`;
+      console.log(`[PokeCenter] ALERT — ${toAlert.length} newly available`);
+      const emailResult = await sendPokecenterEmail(subject, html).catch(e => ({ error: e.message }));
+      const smsResult = await sendSmsToKris(smsBody).catch(e => ({ error: e.message }));
+      for (const p of toAlert) pokecenterState.lastAlertByUrl[p.url] = now;
+      pokecenterState.lastAlert = { at: new Date().toISOString(), count: toAlert.length, items: toAlert.map(p => ({ url: p.url, title: p.title, price: p.price })), emailResult, smsResult };
+    }
+
+    pokecenterState.lastCheckAt = result.fetchedAt;
+    pokecenterState.lastNavMs = result.navMs;
+    pokecenterState.products = result.products;
+    savePokecenterState();
+    return {
+      ok: true,
+      total: result.products.length,
+      soldOut: result.products.filter(p => p.soldOut).length,
+      available: result.products.filter(p => !p.soldOut).length,
+      newlyAvailable: toAlert,
+      navMs: result.navMs,
+    };
+  } finally {
+    pokecenterCheckInProgress = false;
+  }
+}
+
+// Token-protected manual / cron trigger
+app.post("/api/pokemoncenter-check", async (req, res) => {
+  const expectedToken = process.env.CRON_TOKEN;
+  const givenToken = req.headers["x-cron-token"] || (req.body && req.body.token);
+  if (expectedToken && givenToken !== expectedToken) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    const r = await runPokecenterCheck({ force: req.query.force === "1" });
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Public read-only status (debugging + dashboard hookup)
+app.get("/api/pokemoncenter-status", (req, res) => {
+  const products = pokecenterState.products || [];
+  res.json({
+    lastCheckAt: pokecenterState.lastCheckAt,
+    lastNavMs: pokecenterState.lastNavMs,
+    consecutiveErrors: pokecenterState.consecutiveErrors || 0,
+    lastError: pokecenterState.lastError || null,
+    lastAlert: pokecenterState.lastAlert || null,
+    total: products.length,
+    soldOut: products.filter(p => p.soldOut).length,
+    available: products.filter(p => !p.soldOut).length,
+    availableItems: products.filter(p => !p.soldOut),
+    sourceUrl: POKECENTER_URL,
+  });
+});
+
+// Manual test of the alert path without waiting for an actual restock.
+app.post("/api/pokemoncenter-test-alert", async (req, res) => {
+  const expectedToken = process.env.CRON_TOKEN;
+  const givenToken = req.headers["x-cron-token"] || (req.body && req.body.token);
+  if (expectedToken && givenToken !== expectedToken) return res.status(401).json({ error: "Unauthorized" });
+  const fake = { url: POKECENTER_URL, title: "TEST: alert path verification", price: "$0.00" };
+  try {
+    const email = await sendPokecenterEmail(
+      "🎴 PokeCenter monitor test alert",
+      `<p>This is a test of the Pokémon Center monitor alert path.</p><p>Time: ${new Date().toISOString()}</p>`
+    ).catch(e => ({ error: e.message }));
+    const sms = await sendSmsToKris(`🎴 PokeCenter monitor test ${new Date().toLocaleTimeString()}`).catch(e => ({ error: e.message }));
+    res.json({ ok: true, email, sms, fake });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/ending-auctions", async (req, res) => {
   try {
     // Fetch fresh if no cache or data is older than 5 minutes
@@ -1935,5 +2129,27 @@ const PORT = process.env.PORT || 3456;
     }, msUntil);
   }
   scheduleNextMidnight();
+
+  // Pokémon Center stock monitor: every minute.
+  // Enabled by default; set POKECENTER_MONITOR=off to disable.
+  if (process.env.POKECENTER_MONITOR !== "off") {
+    const intervalMs = Number(process.env.POKECENTER_INTERVAL_MS) || 60_000;
+    let warmedUp = false;
+    const tick = async () => {
+      try {
+        const r = await runPokecenterCheck();
+        if (r.skipped) return;
+        if (!warmedUp) { warmedUp = true; console.log("[PokeCenter] First check OK:", { total: r.total, soldOut: r.soldOut, available: r.available, navMs: r.navMs }); }
+        if (r.newlyAvailable && r.newlyAvailable.length > 0) {
+          console.log(`[PokeCenter] ${r.newlyAvailable.length} newly available`);
+        }
+      } catch (e) {
+        console.error("[PokeCenter] check error:", e.message);
+      }
+    };
+    // First run after a short delay so server is ready
+    setTimeout(() => { tick(); setInterval(tick, intervalMs); }, 10_000);
+    console.log(`[PokeCenter] Monitor enabled, interval=${intervalMs}ms`);
+  }
 })();
 process.stdin.resume();
