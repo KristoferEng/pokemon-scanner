@@ -1855,26 +1855,41 @@ function savePokecenterState() {
 }
 
 async function sendSmsToKris(message) {
+  const to = process.env.POKECENTER_SMS_TO || "+16506650579";
+  const trimmed = message.slice(0, 1500);
+
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_FROM_NUMBER;
-  const to = process.env.POKECENTER_SMS_TO || "+16506650579";
-  if (!sid || !token || !from) {
-    console.warn("[SMS] Missing TWILIO_* env vars — skipping SMS to", to);
-    return { provider: "none", skipped: true };
+  if (sid && token && from) {
+    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+    const body = new URLSearchParams({ From: from, To: to, Body: trimmed });
+    const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+      method: "POST",
+      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    if (!resp.ok) throw new Error(`Twilio ${resp.status}: ${await resp.text()}`);
+    const data = await resp.json();
+    console.log(`[SMS] Twilio sent to ${to}, sid=${data.sid}`);
+    return { provider: "twilio", id: data.sid };
   }
-  // Twilio messages REST API
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-  const body = new URLSearchParams({ From: from, To: to, Body: message.slice(0, 1500) });
-  const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+
+  // TextBelt fallback. Free key "textbelt" gives 1 SMS/day per IP — enough
+  // when restocks are rare. A paid TEXTBELT_KEY env var lifts the limit.
+  const tbKey = process.env.TEXTBELT_KEY || "textbelt";
+  const tbResp = await fetch("https://textbelt.com/text", {
     method: "POST",
-    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ phone: to.replace(/^\+/, ""), message: trimmed, key: tbKey }),
   });
-  if (!resp.ok) throw new Error(`Twilio ${resp.status}: ${await resp.text()}`);
-  const data = await resp.json();
-  console.log(`[SMS] Sent to ${to}, sid=${data.sid}`);
-  return { provider: "twilio", id: data.sid };
+  const tbData = await tbResp.json().catch(() => ({}));
+  if (tbData.success) {
+    console.log(`[SMS] TextBelt sent to ${to}, id=${tbData.textId}, quotaRemaining=${tbData.quotaRemaining}`);
+    return { provider: "textbelt", id: tbData.textId, quotaRemaining: tbData.quotaRemaining };
+  }
+  console.warn(`[SMS] TextBelt failed: ${JSON.stringify(tbData)}`);
+  return { provider: "textbelt", error: tbData.error || "unknown", quotaRemaining: tbData.quotaRemaining };
 }
 
 async function sendPokecenterEmail(subject, html) {
